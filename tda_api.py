@@ -8,7 +8,7 @@ from requests import Session, Request, PreparedRequest
 import pandas as pd, numpy as np, requests
 from pandas.io.json import json_normalize
 from datetime import datetime
-from os.path import path
+from os import path
 import time
 from monthdelta import monthdelta
 
@@ -148,7 +148,7 @@ class Td:
                 if isWeekly:
                     if monthlyOnly:
                         continue
-                    df = df.append((pd.Series(r)), ignore_index=True)
+                df = df.append((pd.Series(r)), ignore_index=True)
 
         df.columns = option_params['interested_columns']
         return df
@@ -191,6 +191,6 @@ class Td:
             except BaseException:
                 print("can't open config.json file")
 
-            td = Td(access_token, refresh_token, client_id, data['API_KEY'], access_token_timestamp, access_token_expires_in, refresh_token_expires_in)
-            return td
+        td = Td(access_token, refresh_token, client_id, data['API_KEY'], access_token_timestamp, access_token_expires_in, refresh_token_expires_in)
+        return td
 # okay decompiling tda_api.pyc
