@@ -29,7 +29,6 @@ def persist_stock_price_history(symbol):
         end_date = datetime.datetime.strftime(datetime.datetime.today(), '%Y-%m-%d')
         market_hours = Td.get_market_hour(start_date, end_date)
         #First check what we have in the mongo DB
-        market_hours["market_day"] = market_hours["market_open"].apply(lambda x: datetime.datetime(x.year, x.month, x.day, 0, 0, 0))
         dest_data = set(market_hours["market_day"])
         db_stock_df = m.read_df('stockhist', True, "datetime", [], {} ,{"datetime":1})
         if db_stock_df is not None and db_stock_df.shape[0] > 0:
@@ -290,11 +289,13 @@ def persist_option_hist_file(fileName, symbol):
         if symbol is not None:
             df = df[df.UnderlyingSymbol == symbol]
         dates = np.unique(df.data_date)
+        print("df.shape", df.shape)
         for d in dates:
             cur_df = df[df.data_date == d]
             stock_closing_price = np.min(cur_df["UnderlyingPrice"])
             cur_df = filter_df_by_count(cur_df, 50, stock_closing_price)
-            m.write_df(df, "optionhist")
+            m.write_df(cur_df, "optionhist")
+
 
 def main(argv):
     fileName = None
@@ -308,6 +309,7 @@ def main(argv):
                 print(sys.argv[0] + '-f <filename> -d <dirName> -s <symbol>')
                 sys.exit()
             if opt == '-f':
+                print("getting file", arg)
                 fileName = arg
             if opt == '-d':
                 dirName = arg
@@ -316,8 +318,11 @@ def main(argv):
         if symbol is None:
             print("please specifiy symbol as -s")
             exit(-1)
-        if fileName is not None and os.path.isfile(fileName):
+        if fileName is not None and os.path.exists(fileName):
             persist_option_hist_file(fileName, symbol)
+        elif fileName is not None and not os.path.exists(fileName):
+            print("Can't find", fileName)
+            exit(-1)
         if dirName is not None:
             try:
                 persist_option_dirs(dirName, symbol)

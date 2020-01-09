@@ -24,7 +24,6 @@ def delta_days(d1, d2):
 
 
 class OptionStats:
-
     d_begin = None
     d_end = None
     filename = ""
