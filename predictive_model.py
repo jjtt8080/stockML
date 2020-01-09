@@ -33,6 +33,10 @@ sc_putvol_ratio =  MinMaxScaler(feature_range=(0, 1))
 fmt = "%Y-%m-%d"
 DEBUG_LEVEL = 1
 
+## Define some model parameters
+STEP_SIZE = 90
+predicted_range = 3
+NUM_FEATURES = 4
 def debug_print(*argv):
     if DEBUG_LEVEL==1:
         for arg in argv:
@@ -52,7 +56,7 @@ def resetHour(x):
 
 def convertDate(t):
     ## For some reason FIN API's stock date is 1 day ahead
-    dateS = datetime.datetime.fromtimestamp(float(t)) + datetime.timedelta(days=1)
+    dateS = datetime.datetime.fromtimestamp(float(t))  + datetime.timedelta(days=1)
     dateS = resetHour(dateS)
     return dateS
 
@@ -86,9 +90,10 @@ def getOptionHist(symbol, startDate, endDate):
     sortSpec = {'symbol': 1, 'date': 1}
     m = mongo_api()
     df = m.read_df('optionstat', False, projectionAttrs, projectionMeasures, filter, sortSpec)
-    print("df.columns", df.columns)
-    df = df[(df.date >= startDate) & (df.date <= endDate)]
-    print("OptionHistory shape", df.shape, df.columns)
+    if df is not None and df.shape[0] > 0:
+        print("df.columns", df.columns)
+        df = df[(df.date >= startDate) & (df.date <= endDate)]
+        print("OptionHistory shape", df.shape, df.columns)
     return df
 
 
@@ -97,7 +102,7 @@ def compare_dif(stockDf, optionDf):
     option_date = set(optionDf.date)
     diff2 = stock_date - option_date
     print(diff2)
-    return diff2
+    return list(diff2)
 
 
 def preprocess_files(symbol, code, parameters):
@@ -111,13 +116,22 @@ def preprocess_files(symbol, code, parameters):
     endDate =  np.max(dataset['data_date'])
     print("getting option history from ", startDate, " to ", endDate)
     optionHist = getOptionHist(symbol, startDate, endDate)
-    #optionHist = computeOptionHist(symbol, startDate, endDate)
+    if optionHist is None or optionHist.shape[0] == 0:
+        optionHist = computeOptionHist(symbol, startDate, endDate)
     optionHist["put_ratio"] = optionHist["putvol"] / optionHist["callvol"]
     optionHist["callvoi"] = optionHist["callvol"] / optionHist["calloi"]
     diff = compare_dif( dataset, optionHist)
-    if len(diff) > 0:
+    if len(diff) > 1:
         print("insufficient data")
         exit(1)
+    else:
+        x1 = diff[0].to_pydatetime().date()
+        x2 = datetime.datetime.today().date()
+        if x1 == x2:
+            dataset.drop(dataset.tail(1).index, inplace=True)
+        else:
+            exit(1)
+
     t_set = dataset.iloc[:, 0:1].values
     t_set_vol = dataset.iloc[:, 6:7].values
     o_set = optionHist["put_ratio"].values
@@ -132,15 +146,17 @@ def preprocess_files(symbol, code, parameters):
     Y = []
     X_unscaled = []
     Y_unscaled = []
-    for i in range(60, t_set.shape[0]-1):
-        for j in range(i-60, i):
+    steps = 0
+    for i in range(STEP_SIZE, t_set.shape[0]-predicted_range):
+        for j in range(i-STEP_SIZE, i):
             X.append((t_set_scaled[j,0],  t_set_vol_scaled[j, 0], o_set_scaled[j,0], o_vol_scaled[j,0]))
             X_unscaled.append((t_set[j,0], t_set_vol[j,0]))
-        Y.append(t_set_scaled[i+1, 0])
-        Y_unscaled.append(t_set[i+1,0])
+        Y.append(t_set_scaled[i+1:i+predicted_range, 0])
+        Y_unscaled.append(t_set[i+i:predicted_range,0])
+        steps +=1
     X_t, Y_t = np.array(X), np.array(Y)
-    X_t = X_t.reshape(len(Y_t), 60, 4)
-    print(X_unscaled[-60:-1])
+    X_t = X_t.reshape(steps, STEP_SIZE, NUM_FEATURES)
+    print(X_unscaled[-STEP_SIZE:-1])
     print(Y_unscaled[-3:])
     print(len(Y))
     return(X_t, Y_t, X_unscaled, Y_unscaled)
@@ -148,13 +164,13 @@ def preprocess_files(symbol, code, parameters):
 
 def model(X_train, y_train):
     regressor = Sequential()
-    regressor.add(LSTM(units=60, return_sequences=True, input_shape=(X_train.shape[1], 4)))
+    regressor.add(LSTM(units=STEP_SIZE, return_sequences=True, input_shape=(X_train.shape[1], NUM_FEATURES)))
     regressor.add(Dropout(0.2))
     regressor.add(LSTM(units=40, return_sequences=True))
     regressor.add(Dropout(0.2))
     regressor.add(LSTM(units=40))
     regressor.add(Dropout(0.2))
-    regressor.add(Dense(units=1))
+    regressor.add(Dense(units=2))
     regressor.compile(optimizer='adam', loss='mean_squared_error')
     regressor.fit(X_train, y_train, epochs=20, batch_size=16)
     return regressor;
@@ -193,6 +209,7 @@ def main(argv):
     watch_list = None
     output_model = None
     my_modele  = None
+
     try:
         opts, args = getopt.getopt(argv, "hs:d:c:o:w:",
                                    ["help", "symbol=",  "date_range=", "code=", "output=", "watchlist="])
@@ -222,9 +239,14 @@ def main(argv):
     if output_filename is not None and os.path.exists(output_filename+".json"):
         my_model = load(output_filename + ".json", output_filename + ".h5")
     else:
+        output_filename = "temp_" + datetime.datetime.strftime(datetime.datetime.today(), '%y%m%d')
         my_model = model(X_train, Y_train)
+        save(my_model, output_filename)
+    if len(X_test) <= 0:
+        print("Not enough testing data")
+        exit(1)
     predicted = predict(my_model, X_test)
-    save(my_model, output_filename)
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])

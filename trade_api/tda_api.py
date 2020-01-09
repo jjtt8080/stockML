@@ -290,11 +290,20 @@ class Td:
             return None;
         return df
 
+    @staticmethod
+    def is_market_open(t):
+        inputD = datetime.fromtimestamp(t)
+        thisDate = datetime.date(inputD)
+        c = Td.get_market_hour(thisDate, thisDate)
+        if c.shape[0] == 1:
+            return inputD >= c["market_open"][0] and inputD < c["market_close"][0]
+        return False
 
     @staticmethod
     def get_market_hour(s, e):
         nyse = mcal.get_calendar('NYSE')
         schedules = nyse.schedule(start_date=s, end_date=e)
+        schedules["market_day"] = schedules["market_open"].apply(lambda x: datetime(x.year, x.month, x.day, 0, 0, 0))
         return schedules
 
     @staticmethod

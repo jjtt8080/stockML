@@ -1,30 +1,17 @@
 import numpy as np
 import pandas as pd
-import sys, getopt, json
+import sys, getopt
 import os as os;
 from datetime import datetime
 import tarfile
 import calendar
 
+from util import load_watch_lists, delta_days
+
 calendar.setfirstweekday(6)
-
-def Union(lst1, lst2):
-    final_list = list(set(lst1) | set(lst2))
-    return final_list
-
-
-def load_json_file(f):
-    with open(f, 'r') as (wFile):
-        data = json.load(wFile)
-        return data
-
-
-def delta_days(d1, d2):
-    return abs((d2 - d1).days)
 
 
 class OptionStats:
-
     d_begin = None
     d_end = None
     filename = ""
@@ -102,7 +89,7 @@ class OptionStats:
         d_cur = datetime.strptime(d, "%Y%m%d")
         df = df.drop(['OptionExt','Gamma','Vega'], axis=1)
         df = df[df["UnderlyingSymbol"].isin(self.all_quotes)]
-        df = df[(df["Delta"] > 0.4) | (df["Delta"] > -0.3)]
+        #df = df[(df["Delta"] > 0.4) | (df["Delta"] > -0.3)]
         df = df[(df["days_to_expire"] < 90)]
         df = OptionStats.extract_expiration_date(df)
         df["data_date"] = d_cur
@@ -152,6 +139,16 @@ class OptionStats:
                 self.stock_raw_df_map = OptionStats.append_to_symbol_raw_df(self.stock_raw_df_map, s, df)
 
     @staticmethod
+    def aggregate_optionstats_from_detail(df):
+        return df.agg(
+            min_vol=('Volume', np.min), max_vol=('Volume', np.max), mean_vol=('Volume', np.mean),
+            std_vol=('Volume', np.std),
+            min_oi=('OpenInterest', np.min), max_oi=('OpenInterest', np.max), mean_oi=('OpenInterest', np.mean),
+            std_oi=('OpenInterest', np.std),
+            median_iv=('IV', np.median)
+        )
+
+    @staticmethod
     def aggregate_optionstats(df):
         return df.agg(
             calliv_min=('calliv', np.min),calliv_max=('calliv', np.max), calliv_mean=('calliv', np.mean), calliv_std=('calliv', np.std),
@@ -171,6 +168,14 @@ class OptionStats:
             volume_min=('volume', np.min), volume_max=('volume', np.max), \
             volume_mean=('volume', np.mean),volume_std=('volume', np.std)
         )
+    @staticmethod
+    def groupby_columns_from_detail(df, func):
+        try:
+            df_agg = func(df.groupby(by=["UnderlyingSymbol", "data_date"], as_index=True))
+            return df_agg
+        except KeyError as e:
+            print("keyerror({0})".format(e))
+            print(df.columns)
 
     @staticmethod
     def aggregate_columns(self, df, func):
@@ -222,19 +227,6 @@ class OptionStats:
             self.weekday_stock_df.to_pickle(filename+"_stock_weekday")
             self.monthly_stock_df.to_pickle(filename+"_stock_monthly")
             self.year_stock_df.to_pickle(filename+"_stock_yearly")
-
-
-def load_watch_lists(watch_list_file):
-    if not os.path.exists(watch_list_file):
-        print ("file does not exist", watch_list_file)
-        exit(2)
-
-    watch_lists = load_json_file(watch_list_file)
-    final_list = []
-    for w in watch_lists["watch_lists"]:
-        curr_watch = load_json_file(os.path.dirname(watch_list_file) + os.sep + w + ".json")
-        final_list = Union(final_list, curr_watch[w])
-    return final_list
 
 
 def append_option_detail(f, optionstats, analyze_option):
