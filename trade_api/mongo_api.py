@@ -109,6 +109,15 @@ class mongo_api:
                 return list(n.keys())
 
 
+    def getProjection(self, collection_name):
+        collection = self.db[collection_name]
+        cursor = collection.find({}).limit(1)
+        result = None
+        if cursor is not None:
+            for n in cursor:
+                return list(n.keys())
+
+
     def read_df(self,  collection_name, distinct, projectionAttrs, projectionMeasures, filter, sortSpec):
         collection = self.db[collection_name]
         cursor = None
