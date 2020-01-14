@@ -81,8 +81,7 @@ def getDefaultOptionParameters(symbol, type):
      parameters =  {"symbol": symbol, "contractType": type, "strikeCount": 25,
                     "monthIncrement": 3, "strike": '',
                     "interested_columns":
-                        ['expirationDate', 'strikePrice','putCall', 'totalVolume', 'openInterest',
-                         'last', 'bid', 'ask', 'highPrice', 'lowPrice', 'delta', 'mark', 'netChange', 'theta'],"monthlyOption": False}
+                        ['expirationDate', 'strikePrice','putCall', 'totalVolume', 'openInterest','last', 'bid', 'ask', 'highPrice', 'lowPrice', 'delta', 'mark', 'netChange', 'theta', 'volatility'],"monthlyOption": False}
      return parameters
 
 def getOptions(parameters, symbol, code):

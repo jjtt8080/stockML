@@ -4,6 +4,7 @@ import pymongo
 import getopt
 import sys
 from pymongo import MongoClient
+import bson
 
 class mongo_api:
     def __init__(self, host='localhost', port=27017, database_name = 'trademl'):
@@ -19,8 +20,9 @@ class mongo_api:
         #aux_df=aux_df.drop_duplicates(subset=None, keep='last') # To avoid repetitions
         my_list = my_df.to_dict('records')
         l =  len(my_list)
-        collection.insert_many(my_list) # fill de collection
-        print('Done')
+        if l > 0:
+            collection.insert_many(my_list) # fill de collection
+        #print('Done')
         return l
 
     def deleteMany(self, collection_name, filter):
@@ -81,12 +83,22 @@ class mongo_api:
         return pipeline
 
     def count(self, collection_name, filter):
-        collection = self.db[collection_name]
-        return collection.find(filter).count()
+        try:
+            collection = self.db[collection_name]
+            if collection is not None:
+                return collection.find(filter).count()
+            else:
+                return 0
+        except bson.errors.InvalidDocument as Error:
+            print("Error on filter")
+            exit(-1)
 
     def countDistinct(self, collection_name, projection, filter):
         collection = self.db[collection_name]
-        return len(collection.find(filter).distinct(projection))
+        if collection is not None:
+            return len(collection.find(filter).distinct(projection))
+        else:
+            return 0
 
     def getProjection(self, collection_name):
         collection = self.db[collection_name]

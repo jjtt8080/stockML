@@ -211,12 +211,14 @@ class Td:
         authReply = requests.get(('https://api.tdameritrade.com/v1/marketdata/' + symbol + '/pricehistory'), headers=headers,
           params=data)
         candles = authReply.json()
-        print("price_history result json", candles)
+        #print("price_history result json", candles)
         df = json_normalize(authReply.json())
         #print("df",df)
         df = pd.DataFrame(candles['candles'])
         df['datetime'] = Td.convert_timestamp_to_time(df['datetime'], 'ms')
         return df
+
+
     def get_option_chain_map(self, oc, exprDays, monthlyOnly, option_params):
         df = pd.DataFrame()
         for e in exprDays:
@@ -227,7 +229,7 @@ class Td:
                 values = np.array(v[s]).flatten()
                 isWeekly = False
                 for a in values:
-                    print(a.keys())
+                    #print(a.keys())
                     if monthlyOnly == True:
                         if 'Weekly' in a['description']:
                             isWeekly = True
@@ -243,6 +245,8 @@ class Td:
                     continue
                 df = df.append((pd.Series(r)), ignore_index=True)
         return df
+
+
     def get_option_chain(self, option_params):
         #print('getting options, parameters:', option_params)
         monthlyOnly = option_params['monthlyOption']
@@ -340,7 +344,7 @@ class Td:
             except BaseException:
                 print("Error happened during dump the access file or authentication")
 
-            print("authenticated result", res)
+            #print("authenticated result", res)
             access_token = res['access_token']
             refresh_token = res['refresh_token']
             #print(time.time())

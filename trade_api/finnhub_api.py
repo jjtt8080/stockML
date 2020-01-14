@@ -126,6 +126,8 @@ class Finnapi:
         param = json.loads(option_params)
         self.curr_symbol = symbol
         response = self.call_api('candle',  param)
+        if response["s"] != 'ok':
+            return None
         df = pd.DataFrame(data = response)
         return df
 # okay decompiling finnhub_api.pyc
