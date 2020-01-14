@@ -19,82 +19,6 @@ import timedelta
 from util import debug_print, append_df, load_watch_lists
 from trade_api.db_api import read_one_stock_quote, getStockDesc, get_stock_price_history, recordExists
 from trade_api.calculate_iv import newton_vol_call,newton_vol_put,newton_vol_call_div,newton_vol_put_div
-=======
-DEBUG_LEVEL = 1
-
-
-def debug_print(*argv):
-    if DEBUG_LEVEL==1:
-        for arg in argv:
-            print(arg)
-
-
-def persist_stock_price_history(symbol):
-    try:
-        m = mongo_api()
-        start_date = '2015-12-02'
-        end_date = datetime.datetime.strftime(datetime.datetime.today(), '%Y-%m-%d')
-        market_hours = Td.get_market_hour(start_date, end_date)
-        #First check what we have in the mongo DB
-        dest_data = set(market_hours["market_day"])
-        db_stock_df = m.read_df('stockhist', True, "datetime", [], {} ,{"datetime":1})
-        if db_stock_df is not None and db_stock_df.shape[0] > 0:
-            db_stock_df["market_day"] = db_stock_df.iloc[:,0].apply(lambda x: datetime.datetime(x.year, x.month, x.day, 0,0,0))
-            curr_data = set(db_stock_df["market_day"])
-            diff_date = np.array(list(dest_data - curr_data))
-        else:
-            diff_date = np.array(list(dest_data))
-        diff_date = np.sort(diff_date)
-        print("Differentiated dates", len(diff_date))
-        if len(diff_date) <=0:
-            return
-        delta = (diff_date[len(diff_date)-1] - diff_date[0]).days + 1
-        option_params = "{\"resolution\" : \"D\", \"count\": " + str(delta) + "}"
-        df = getResultByType('price_history', '2048', symbol, option_params)
-        df["datetime"] = df.t.apply(lambda x: Td.convert_timestamp_to_time(x, 's'))
-        df["symbol"] = symbol
-        df = df.sort_values(['datetime'])
-        debug_print("read stock history", df.shape)
-        debug_print(df.datetime)
-        m.write_df(df, 'stockhist')
-        return df.shape[0]
-    except KeyError:
-        print("error when persist stock price history")
-        return 0
-
-
-def read_single_date_price(symbol,currDate):
-    m = mongo_api()
-    if currDate.isoweekday() == 6:
-        currDate = currDate - datetime.timedelta(1)
-    if currDate.isoweekday() == 7:
-        currDate = currDate - datetime.timedelta(2)
-    debug_print("1.1, currDate", currDate,  currDate + datetime.timedelta(1))
-    debug_print("1.2", currDate + datetime.timedelta(1))
-    date_filter = {'datetime': {'$gt': currDate, '$lt': currDate + datetime.timedelta(1)}}
-    try:
-        db_df = m.read_df('stockhist', False, ['c', 'datetime'], [], {'$and': [{'symbol': {'$eq': symbol}}, date_filter]}, None)
-        if db_df.shape is not None and db_df.shape[0] >= 1:
-            debug_print("found price for ", currDate, " at ", db_df.iloc[0,1])
-            return db_df.iloc[0, 1]
-        else:
-            print("can't find specific symbol")
-            return None
-    except KeyError:
-        print("error when reading single stock price history")
-        return None
-
-
-def get_stock_price_history(symbol, currDate):
-    try:
-        p = read_single_date_price(symbol,currDate)
-        if p is None:
-            debug_print("can't find the symbol in specific date", symbol, currDate)
-        return p
-    except TypeError:
-        print("error when get stock price history")
-        exit(1)
->>>>>>> bbba58a92acd0e075c0b271c3f54bb4d4623e4ed
 
 DEBUG_LEVEL = 1
 
@@ -414,27 +338,6 @@ def persist_option_hist_file(fileName, symbols):
     if df is not None:
         m = mongo_api()
         df = df.drop("Expiration", axis=1)
-<<<<<<< HEAD
-        debug_print("df.shape", df.shape)
-        for s in symbols:
-            try:
-                numstats_per_symbol = insert_one_symbol(df, s, m)
-                debug_print(s, ":", numstats_per_symbol)
-                num_stats += numstats_per_symbol
-            except:
-                print("Error when processing symbol", s)
-                continue
-    debug_print("number of records inserted to optionhist", num_stats)
-
-def load_json_for_symbol(symbol):
-    symbols = []
-    symbol = symbol.replace("'", "\"")
-    symbol = '{\"symbols\":' + symbol + '}'
-    if symbol is not None:
-        symbols = json.loads(symbol)
-        return symbols["symbols"]
-    return None
-=======
         if symbol is not None:
             df = df[df.UnderlyingSymbol == symbol]
         dates = np.unique(df.data_date)
@@ -445,7 +348,6 @@ def load_json_for_symbol(symbol):
             cur_df = filter_df_by_count(cur_df, 50, stock_closing_price)
             m.write_df(cur_df, "optionhist")
 
->>>>>>> bbba58a92acd0e075c0b271c3f54bb4d4623e4ed
 
 def main(argv):
     fileName = None
@@ -481,14 +383,6 @@ def main(argv):
         elif fileName is not None and not os.path.exists(fileName):
             print("Can't find", fileName)
             exit(-1)
-<<<<<<< HEAD
-=======
-        if fileName is not None and os.path.exists(fileName):
-            persist_option_hist_file(fileName, symbol)
-        elif fileName is not None and not os.path.exists(fileName):
-            print("Can't find", fileName)
-            exit(-1)
->>>>>>> bbba58a92acd0e075c0b271c3f54bb4d4623e4ed
         if dirName is not None:
             try:
                 persist_option_dirs(dirName, symbols)
