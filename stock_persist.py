@@ -22,6 +22,7 @@ def get_market_days():
     dest_data = set(market_hours["market_day"])
     return (dest_data, start_date, end_date)
 
+
 def persist_stock_price_history(symbols):
         m = mongo_api()
         (dest_data, start_date, end_date) = get_market_days()
@@ -184,16 +185,13 @@ def read_optionistics_stock(symbols, dirName):
     return total_recs
 
 
-def persist_daily_stock(day_range):
+def persist_daily_stock_for_symbols(symbols, error_symbols, day_range):
     df_out = None
-    symbols = load_watch_lists("data/watch_list.json")
-    day_range = str(day_range)
-    m = mongo_api()
-    error_symbols = []
-    symbols = np.sort(symbols)
+    symbol_count = 0
     for symbol in symbols:
+
         try:
-            print("getting", symbol)
+            #print("getting", symbol)
             df = getResultByType('price_history', '2048', symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
             if df is None:
                 error_symbols.append(symbol)
@@ -209,16 +207,42 @@ def persist_daily_stock(day_range):
             df["year"] = year
             df = calculate_spread(df)
             df_out = append_df(df_out, df)
+            symbol_count += 1
+            if symbol_count % 30 == 0:
+                time.sleep(3)
         except json.decoder.JSONDecodeError:
             time.sleep(3)
             continue
+    if df_out is not None:
+        if not os.path.exists('today_stock.pickle'):
+            df_out.to_pickle('today_stock.pickle')
+        else:
+            df = pd.read_pickle('today_stock.pickle')
+            df_out = append_df(df_out, df)
+            df_out.to_pickle('today_stock.pickle')
+    return df_out
 
-    df_out.to_pickle('today_stock.pickle')
-    print("error symbols", error_symbols)
-    #m.write_df(df_out, 'stockcandles')
+
+def persist_daily_stock(day_range):
+    df_out = None
+    symbols = load_watch_lists("data/watch_list.json")
+    day_range = str(day_range)
+    m = mongo_api()
+    error_symbols = []
+    symbols = np.sort(symbols)
+    retryCount = 0
+    while(1):
+        df= persist_daily_stock_for_symbols(symbols, error_symbols, day_range)
+        df_out = append_df(df_out, df)
+        if len(error_symbols) or df_out.shape[0]:
+            break
+        else:
+            print("error symbols, continuing", error_symbols)
+    if df_out is not None:
+        m.write_df(df_out, 'stockcandles')
     print("total # of rows written", df_out.shape[0])
 
-persist_daily_stock(1)
+persist_daily_stock(2)
 #symbols = Td.load_json_file("data/high_vol.json")["high_vol"]
 
 #read_optionistics_stock(symbols, "/home/jane/Downloads/stocks")

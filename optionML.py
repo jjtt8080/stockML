@@ -136,7 +136,7 @@ def getResultByType(request_type,code,symbol, parameters, use_td=False):
             parameters = json.loads(parameters)
             result = td.get_price_history(symbol, None, None, parameters)
         else:
-            print(parameters)
+            #print(parameters)
             f = Finnapi('', 2)
             result = f.getCandleStick(symbol, parameters)
     elif request_type == 'option_history':
