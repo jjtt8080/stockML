@@ -6,6 +6,7 @@ import datetime
 from util import debug_print
 sys.path.append("..")
 from trade_api.mongo_api import mongo_api
+from trade_api.tda_api import Td
 
 def getStockDesc(symbols, descName):
     m = mongo_api()
@@ -22,7 +23,7 @@ def recordExists(collection_name, filter):
     bexist = (m.count(collection_name, filter) > 0)
     return bexist
 
-def constructor_day_filter(currDate):
+def construct_day_filter(currDate):
     if currDate.isoweekday() == 6:
         currDate = currDate - datetime.timedelta(1)
     if currDate.isoweekday() == 7:
@@ -36,7 +37,7 @@ def constructor_day_filter(currDate):
 
 def read_one_stock_quote(symbol,currDate, projection):
     m = mongo_api()
-    date_filter = constructor_day_filter(currDate)
+    date_filter = construct_day_filter(currDate)
     assert(type(projection) == str)
     try:
         db_df = m.read_df('stockcandles', False, [projection], [], {'$and': [{'symbol': {'$eq': symbol}}, date_filter]}, None)
@@ -61,3 +62,11 @@ def get_stock_price_history(symbol, currDate):
         print("error when get stock price history")
         exit(1)
 
+
+def check_persist_timing(m, collection_name, date_filter, today):
+    if Td.is_trading_day(today) and not Td.is_market_open(today) and m.countDistinct(collection_name, date_filter) == 0:
+        print("Persisting due to 0 records in db for today")
+        return True
+    else:
+        print("Not persisting due to either market is not open, or currently is market hour, or there is already record in db")
+        return False

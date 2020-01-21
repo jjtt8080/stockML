@@ -6,7 +6,6 @@
 import json
 import pandas as pd, numpy as np, requests
 from pandas.io.json import json_normalize
-from datetime import datetime
 from os import path
 import time
 from monthdelta import monthdelta
@@ -15,11 +14,10 @@ from selenium import webdriver
 from shutil import which
 from urllib import parse as up
 import time
-from datetime import datetime
 from dateutil.tz import tzutc
 import pandas_market_calendars as mcal
-
-
+import datetime
+timezone = 'America/Los_Angeles'
 class Td:
     access_token = ''
     refresh_token = ''
@@ -134,7 +132,7 @@ class Td:
             ms = int(round(time.time() * 1000))
             return ms
         else:
-            dt_2020 = datetime.fromisoformat(time_input)
+            dt_2020 = datetime.datetime.fromisoformat(time_input)
             ms = dt_2020.strftime('%d')
             return ms
 
@@ -250,7 +248,7 @@ class Td:
     def get_option_chain(self, option_params):
         #print('getting options, parameters:', option_params)
         monthlyOnly = option_params['monthlyOption']
-        today_date = datetime.today()
+        today_date = datetime.datetime.today()
         self.check_access_token_valid()
         token = self.access_token
         headers = {'Content-Type':'application/x-www-form-urlencoded',  'Authorization':'Bearer {}'.format(token)}
@@ -295,20 +293,44 @@ class Td:
         return df
 
     @staticmethod
-    def is_market_open(t):
-        inputD = datetime.fromtimestamp(t)
-        thisDate = datetime.date(inputD)
-        c = Td.get_market_hour(thisDate, thisDate)
-        if c.shape[0] == 1:
-            return inputD >= c["market_open"][0] and inputD < c["market_close"][0]
-        return False
+    def is_market_open(d):
+        inputD = d #datetime.datetime.fromtimestamp(t)
+        thisDate = datetime.date(inputD.year, inputD.month, inputD.day)
+        nyse = mcal.get_calendar('NYSE')
+        schedules = nyse.schedule(start_date=thisDate, end_date=thisDate)
+        if schedules.shape[0] > 0:
+            return nyse.open_at_time(schedules, pd.Timestamp(d, tz=timezone))
+        else:
+            return False
+
+    @staticmethod
+    def is_trading_day(d):
+        inputD = d  # datetime.datetime.fromtimestamp(t)
+        thisDate = datetime.date(inputD.year, inputD.month, inputD.day)
+        nyse = mcal.get_calendar('NYSE')
+        return len(nyse.valid_days(thisDate, thisDate)) >= 1
+
 
     @staticmethod
     def get_market_hour(s, e):
         nyse = mcal.get_calendar('NYSE')
         schedules = nyse.schedule(start_date=s, end_date=e)
-        schedules["market_day"] = schedules["market_open"].apply(lambda x: datetime(x.year, x.month, x.day, 0, 0, 0))
+        schedules["market_day"] = schedules["market_open"].apply(lambda x: datetime.datetime(x.year, x.month, x.day, 0, 0, 0))
         return schedules
+
+
+
+    @staticmethod
+    def get_prev_trading_day(today_date):
+        end_date = datetime.datetime.strftime(today_date, '%Y-%m-%d')
+        start_date = datetime.datetime.today() - datetime.timedelta(days=7)
+        start_date = datetime.datetime.strftime(start_date, '%Y-%m-%d')
+        schedules = Td.get_market_hour(start_date, end_date)
+        schedules = schedules.reset_index()
+        market_days = schedules["market_day"]
+        today_index = market_days.shape[0]-1
+        prev_index = today_index - 1
+        return schedules["market_day"][prev_index]
 
     @staticmethod
     def init(user, secrete):

@@ -114,7 +114,8 @@ def download(url, watch_list_file, start_month,start_day,end_month, end_day,year
 
 def load_json_for_symbol(symbol):
     symbols = []
-    symbol = symbol.replace("'", "\"")
+    if symbol.substr("'") != -1:
+        symbol = symbol.replace("'", "\"")
     symbol = '{\"symbols\":' + symbol + '}'
     if symbol is not None:
         symbols = json.loads(symbol)
@@ -153,15 +154,17 @@ def main(argv):
 
     login(loginurl, username, password)
     print("start_date.month, start_date.day", start_date.month, start_date.day, end_date.month, end_date.day)
-    symbols = load_json_for_symbol(symbol)
-    print("symbols", symbols)
-    if len(symbols) > 0:
-        load_cookie(driver, cookie_file)
-        print("load url", url)
-        driver.get(url)
-        for s in symbols:
-            print("getting symbols", s)
-            download_symbol(url, s, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)
+
+    if watch_list is None:
+        symbols = load_json_for_symbol(symbol)
+        print("symbols", symbols)
+        if len(symbols) > 0:
+            load_cookie(driver, cookie_file)
+            print("load url", url)
+            driver.get(url)
+            for s in symbols:
+                print("getting symbols", s)
+                download_symbol(url, s, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)
     elif symbol is not None:
         download_symbol(url, symbol, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)
     if watch_list is not None:

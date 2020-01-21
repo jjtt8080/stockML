@@ -10,8 +10,9 @@ from optionML import getResultByType
 from trade_api.tda_api import Td
 from util import debug_print, append_df, load_watch_lists
 import os
+import requests
 import trade_api.db_api as db_api
-
+collection_name = 'stockcandles'
 
 STOCK_HIST_FILE_PATH = 'data/historical//pickles/stockhist'
 
@@ -78,14 +79,27 @@ def persist_stock_price_history(symbols):
         return total_recs
 
 
-def calculate_spread(df2):
+def calculate_chg(df2, prev_close=None):
+    if df2 is None:
+        return df2
+    if prev_close is None:
+        df2["prev_c"] = df2["close"].shift()
+        i = list(df2.columns).index("prev_c")
+        i2 = list(df2.columns).index("close")
+        df2.iloc[0, i] = df2.iloc[0, i2]
+    else:
+        print(df2["symbol"])
+        if type (prev_close) == pd.core.indexing._iLocIndexer and len(prev_close.obj) > 0:
+            print(prev_close[0])
+            df2["prev_c"] = prev_close[0]
+            df2["chg"] = df2["close"] - df2["prev_c"]
+    return df2
+
+def calculate_spread(df2, prev_close=True):
     if "date" not in df2.columns:
         df2["date"] = df2.apply(lambda x: datetime.datetime(x.year, x.month, x.d_index), axis=1)
-    df2["prev_c"] = df2["close"].shift()
-    i = list(df2.columns).index("prev_c")
-    i2 = list(df2.columns).index("close")
-    df2.iloc[0, i] = df2.iloc[0, i2]
-    df2["chg"] = df2["close"] - df2["prev_c"]
+    if prev_close:
+        df2 = calculate_chg(df2)
     df2["ho_spread"] = df2["high"] - df2["open"]
     df2["cl_spread"] = df2["close"] - df2["low"]
     return df2
@@ -102,7 +116,7 @@ def persist_stock_history_from_file(symbols):
             df = calculate_spread(df)
             print(df.shape, df.columns)
             total_recs += df.shape[0]
-            m.write_df(df, "stockcandles")
+            m.write_df(df, collection_name)
         except KeyError:
             print("error when persist stock price history")
             continue
@@ -167,29 +181,64 @@ def persist_optionistics_stock_file(df, symbol, m):
     df["month"] = month
     df["year"] = year
     df = calculate_spread(df)
-    m.write_df(df, 'stockcandles')
-    return df.shape[0]
+    return df
 
 
 def read_optionistics_stock(symbols, dirName):
     m = mongo_api()
     total_recs = 0
+    df_out = None
     for (root,dirs,files) in os.walk(dirName, topdown=True):
         for fi in files:
             (file_type, d_cur, curr_symbol, fi) = parse_optionistics_filename(root, fi)
+            print(file_type, fi)
             if file_type == 'OPTIONISTICS':
                 print("reading ", fi)
                 df = pd.read_csv(fi)
-                total_recs += persist_optionistics_stock_file(df, curr_symbol, m)
-    print("total rec inserted" , total_recs)
+                df = persist_optionistics_stock_file(df, curr_symbol, m)
+                df_out = append_df(df_out, df)
+    total_recs = df_out.shape[0]
+    print("total rec inserted", total_recs)
+    df_out.to_pickle('today_stock.pickle')
     return total_recs
 
 
-def persist_daily_stock_for_symbols(symbols, error_symbols, day_range):
+def update_close_for_df(symbols, df, prev_df):
+    output_df = None
+    for symbol in symbols:
+        today_df = df[df["symbol"] == symbol]
+        if today_df is None:
+            continue
+        prev_df_s = prev_df[prev_df["symbol"]==symbol]
+        prev_close = prev_df_s["close"].iloc(0)
+        today_df = calculate_chg(today_df, prev_close)
+        output_df = append_df(output_df, today_df)
+    return output_df
+
+
+def update_multiple_date_close(df, dates, prev_df, symbols):
+    symbols = list(np.unique(df["symbol"]))
+    df_out = None
+    for d in dates:
+        print("setting for date", d)
+        df_cur_date = df[df["date"] == d]
+        assert(len(np.unique(prev_df.date)) == 1)
+        assert(prev_df.date.iloc[0] < d)
+        df_updated = update_close_for_df(symbols, df_cur_date, prev_df)
+        #print("updated_df", df_updated)
+        df_out = append_df(df_out, df_updated)
+        prev_df = df_updated
+    return df_out
+
+
+def get_daily_stock_for_symbols(symbols, error_symbols, day_range):
     df_out = None
     symbol_count = 0
-    for symbol in symbols:
+    d = Td.get_prev_trading_day(datetime.datetime.today())
+    m = mongo_api()
 
+    #assert(yesterday_frame.shape[0] == len(symbols))
+    for symbol in symbols:
         try:
             #print("getting", symbol)
             df = getResultByType('price_history', '2048', symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
@@ -197,7 +246,7 @@ def persist_daily_stock_for_symbols(symbols, error_symbols, day_range):
                 error_symbols.append(symbol)
                 continue
             df["symbol"] = symbol
-            df["date"] = df.t.apply(lambda x: datetime.datetime.fromtimestamp(np.int(x)))
+            df["date"] = df.t.apply(lambda x: datetime.datetime.fromtimestamp(np.int(x)) + datetime.timedelta(days=1))
             df = df.rename(columns = {"o": "open", "c": "close", "h": "high", "l": "low", "v": "volume"})
             d_index, month, year = df.date.apply(lambda x: x.day), \
                                    df.date.apply(lambda x: x.month), \
@@ -205,46 +254,97 @@ def persist_daily_stock_for_symbols(symbols, error_symbols, day_range):
             df["d_index"] = d_index
             df["month"] = month
             df["year"] = year
-            df = calculate_spread(df)
+            df = df.drop("s", axis=1)
+            df = df.drop("t", axis=1)
+            df = calculate_spread(df, False)
+            #prev_close = yesterday_frame[yesterday_frame["symbol"] == symbol].iloc(0)
+            #df = calculate_chg(df, prev_close)
             df_out = append_df(df_out, df)
             symbol_count += 1
             if symbol_count % 30 == 0:
+                print("current processed ", symbol_count, " symbols")
                 time.sleep(3)
-        except json.decoder.JSONDecodeError:
+        except requests.exceptions.SSLError:
+            error_symbols.append(symbol)
             time.sleep(3)
             continue
-    if df_out is not None:
-        if not os.path.exists('today_stock.pickle'):
-            df_out.to_pickle('today_stock.pickle')
-        else:
-            df = pd.read_pickle('today_stock.pickle')
-            df_out = append_df(df_out, df)
-            df_out.to_pickle('today_stock.pickle')
+        except json.decoder.JSONDecodeError:
+            error_symbols.append(symbol)
+            time.sleep(3)
+            continue
     return df_out
 
 
-def persist_daily_stock(day_range):
+def persist_daily_stock(day_range, symbol = None):
+
+    #check if
+
     df_out = None
-    symbols = load_watch_lists("data/watch_list.json")
+    if symbol is None:
+        symbols = load_watch_lists("data/highvol_watchlist.json")
+    else:
+        symbols = [symbol]
     day_range = str(day_range)
     m = mongo_api()
+    today = datetime.datetime.today()
+    date_filter = db_api.construct_day_filter(today)
+    if not db_api.check_persist_timing(m, 'optionstat', date_filter, today):
+        return
     error_symbols = []
     symbols = np.sort(symbols)
     retryCount = 0
+
     while(1):
-        df= persist_daily_stock_for_symbols(symbols, error_symbols, day_range)
+        df= get_daily_stock_for_symbols(symbols, error_symbols, day_range)
         df_out = append_df(df_out, df)
-        if len(error_symbols) or df_out.shape[0]:
+        retry_count = 0
+        if (len(error_symbols) == 0 or df_out.shape[0] == len(symbols) or retry_count >= 3):
             break
         else:
             print("error symbols, continuing", error_symbols)
+            retry_count = retry_count + 1
+
     if df_out is not None:
-        m.write_df(df_out, 'stockcandles')
-    print("total # of rows written", df_out.shape[0])
+        print("saving...")
+        today_str = datetime.datetime.today().strftime('%Y-%m-%d')
+        yesterday = Td.get_prev_trading_day(datetime.datetime.today())
+        yesterday_str = yesterday.strftime("%Y-%m-%d")
+        yesterday_frame = None
+        if os.path.exists('stock.pickle_' + yesterday_str):
+            yesterday_frame = pd.read_pickle('yesterday_stock.pickle')
+        dates = list(np.unique(df_out["date"]))
+        if yesterday_frame is not None:
+            if len(dates) > 1:
+                df_out["delete_flg"] = df_out.date.apply(lambda x: x.hour == 16)
+                print("detect multiple dates", df_out.shape)
+                df_out = df_out[df_out["delete_flg"] == False]
+                dates = list(np.unique(df_out["date"]))
+                df_out = df_out.drop("delete_flg", axis=1)
+                print("drop out extra hour frame", df_out.shape)
+                df_out = update_multiple_date_close(df_out, dates, yesterday_frame, symbols)
+            else:
+                df_out = update_close_for_df(symbols, df_out,yesterday_frame )
+        #m.write_df(df_out, collection_name)
+        df_out.to_pickle('stock.pickle' + today_str)
+        print("total # of rows written", df_out.shape[0])
 
-persist_daily_stock(2)
-#symbols = Td.load_json_file("data/high_vol.json")["high_vol"]
 
-#read_optionistics_stock(symbols, "/home/jane/Downloads/stocks")
+persist_daily_stock(4)
+#df = pd.read_pickle('today_stock.pickle')
+#dates = list(np.unique(df["date"]))
+#print(dates)
+#del dates[3]
+#print(dates)
+#today_ts = np.int((pd.Timestamp(dates[0]) - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
+#today = datetime.datetime.fromtimestamp(today_ts)
+#yesterday = Td.get_prev_trading_day(today)
+#m = mongo_api()
+#df_prev = m.read_df(collection_name, False, '*', [], {'$and': [{'symbol': {'$in': symbols}}, {'date': {'$eq': yesterday}}]}, {'symbol': 1, 'date': 1})
+#output_df = update_multiple_date_close(df, dates, df_prev,symbols)
+#output_df.to_pickle('updated.pickle')
+#
+#symbols = load_watch_lists("data/highvol_watchlist.json")
+#print(len(symbols))
+#read_optionistics_stock(symbols, "/home/jane/Downloads/data/200114/")
 #symbols = np.sort(symbols)
 #persist_stock_history_from_file(symbols)

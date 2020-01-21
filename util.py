@@ -1,7 +1,7 @@
 import json
 import os as os
 
-DEBUG_LEVEL = 1
+DEBUG_LEVEL = 0
 import pandas as pd
 import numpy as np
 from trade_api.tda_api import Td

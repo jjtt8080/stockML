@@ -109,21 +109,15 @@ class mongo_api:
                 return list(n.keys())
 
 
-    def getProjection(self, collection_name):
-        collection = self.db[collection_name]
-        cursor = collection.find({}).limit(1)
-        result = None
-        if cursor is not None:
-            for n in cursor:
-                return list(n.keys())
-
-
     def read_df(self,  collection_name, distinct, projectionAttrs, projectionMeasures, filter, sortSpec):
         collection = self.db[collection_name]
         cursor = None
         result = []
+        projCols = projectionAttrs
         if (distinct is False) and len(projectionMeasures) == 0:
             projection = projectionAttrs
+            if projectionAttrs == '*':
+                projection = self.getProjection(collection_name)
             if filter is not {}:
                 cursor = collection.find(filter, projection)
             else:

@@ -13,6 +13,7 @@ from keras.models import model_from_json
 from trade_api.tda_api import Td as Td
 from optionML import getResultByType
 import datetime
+from monthdelta import monthdelta
 from trade_api.mongo_api import mongo_api
 import timedelta
 symbol = None
@@ -42,12 +43,42 @@ def debug_print(*argv):
         for arg in argv:
             print(arg)
 
+
 def getTrainParameters(range):
     return "{\"resolution\": \"D\", \"count\":" + range  + "}"
+
 
 def getTestParameters(range):
     return "{\"resolution\": \"D\", \"count\":" + range + "}"
 
+
+def getDateByCount(day_range):
+    end_date = datetime.datetime.today() - datetime.timedelta(days=1)
+    if day_range.endswith("D"):
+        day_range = day_range[0:len(day_range) - 1]
+        date = datetime.datetime.today() - datetime.timedelta(days=np.int(day_range))
+        debug_print("resolving date from ", day_range, "to", date.strftime('%Y-%m-%d'))
+        return date, end_date
+
+    elif day_range.endswith("M"):
+        day_range = day_range[0:len(day_range) - 1]
+        date = datetime.datetime.today() - monthdelta(np.int(day_range))
+        debug_print("resolving date from ", day_range, "to", date.strftime('%Y-%m-%d'))
+        return date, end_date
+
+    elif day_range.endswith("Y"):
+        day_range = day_range[0:len(day_range) - 1]
+        if day_range.isint():
+            day_range = 12 * np.int(day_range)
+            date = datetime.datetime.today() - monthdelta(day_range)
+            debug_print("resolving date from ", day_range, "to", date.strftime('%Y-%m-%d'))
+            return date, end_date
+
+    else:
+        begin,end = day_range.split(':')
+        begin_date = datetime.datetime.strptime(begin, '%Y%m%d')
+        end_date = datetime.datetime.strptime(end, '%Y%m%d')
+        return begin_date, end_date
 
 def resetHour(x):
     y = datetime.datetime(x.year, x.month, x.day, 0,0,0)
@@ -84,7 +115,7 @@ def computeOptionHist(symbol, startDate, endDate):
 
 
 def getOptionHist(symbol, startDate, endDate):
-    projectionAttrs = ["date", 'callvol', 'putvol', 'calloi', 'putoi']
+    projectionAttrs = ["date", 'max_vol_call', 'max_vol_put', 'mean_vol_call', 'mean_vol_put', 'mean_oi_call', 'mean_oi_put']
     projectionMeasures = []
     filter = {'symbol': {'$eq': symbol}}
     sortSpec = {'symbol': 1, 'date': 1}
@@ -98,14 +129,14 @@ def getOptionHist(symbol, startDate, endDate):
 
 
 def compare_dif(stockDf, optionDf):
-    stock_date = set(stockDf.data_date)
+    stock_date = set(stockDf.date)
     option_date = set(optionDf.date)
     diff2 = stock_date - option_date
     print(diff2)
     return list(diff2)
 
 
-def preprocess_files(symbol, code, parameters):
+def getPHromAPI(code, symbol, parameters):
     dataset = getResultByType('price_history', code, symbol, parameters)
     debug_print("stock dataset shape", dataset.shape)
     dataset['data_date'] = dataset.t.apply(lambda x: convertDate(x))
@@ -115,16 +146,28 @@ def preprocess_files(symbol, code, parameters):
     maxLen = dataset.shape[0]
     endDate =  np.max(dataset['data_date'])
     print("getting option history from ", startDate, " to ", endDate)
-    optionHist = getOptionHist(symbol, startDate, endDate)
+
+
+def getPHFromDb(symbol, begin, end):
+    m = mongo_api()
+    filter = {'$and': [{'symbol':{'$eq': symbol}}, {'date': {'$gte': begin}}, {'date': {'$lt': end}}]}
+    print(filter)
+    df = m.read_df('stockcandles', False, '*', [], {'$and': [{'symbol':{'$eq': symbol}}, {'date': {'$gte': begin}},{'date': {'$lt': end}}]}, {})
+    return df
+
+
+def preprocess_files(symbol, code, begin, end):
+    dataset = getPHFromDb(symbol, begin, end)
+    optionHist = getOptionHist(symbol, begin, end)
     if optionHist is None or optionHist.shape[0] == 0:
-        optionHist = computeOptionHist(symbol, startDate, endDate)
-    optionHist["put_ratio"] = optionHist["putvol"] / optionHist["callvol"]
-    optionHist["callvoi"] = optionHist["callvol"] / optionHist["calloi"]
+        optionHist = computeOptionHist(symbol, begin, end)
+    optionHist["put_ratio"] = optionHist["max_vol_put"] / optionHist["max_vol_call"]
+    optionHist["callvoi"] = optionHist["mean_vol_call"] / optionHist["mean_oi_call"]
     diff = compare_dif( dataset, optionHist)
     if len(diff) > 1:
         print("insufficient data")
         exit(1)
-    else:
+    elif len(diff) == 1:
         x1 = diff[0].to_pydatetime().date()
         x2 = datetime.datetime.today().date()
         if x1 == x2:
@@ -132,13 +175,15 @@ def preprocess_files(symbol, code, parameters):
         else:
             exit(1)
 
-    t_set = dataset.iloc[:, 0:1].values
-    t_set_vol = dataset.iloc[:, 6:7].values
+    t_set = dataset.loc[:, "close"].values
+    t_set_vol = dataset.loc[:,"volume"].values
     o_set = optionHist["put_ratio"].values
     o_set = o_set.reshape(-1,1)
     o_set_vol = optionHist["callvoi"].values
     o_set_vol = o_set_vol.reshape(-1,1)
+    t_set = t_set.reshape(-1, 1)
     t_set_scaled = sc.fit_transform(t_set)
+    t_set_vol = t_set_vol.reshape(-1,1)
     t_set_vol_scaled = sc_vol.fit_transform(t_set_vol)
     o_set_scaled = sc_put_ratio.fit_transform(o_set)
     o_vol_scaled = sc_callvol_ratio.fit_transform(o_set_vol)
@@ -233,8 +278,10 @@ def main(argv):
         sys.exit(2)
     (train_range, test_range) = date_range.split(',')
     print("tran_range, test_range=",  train_range, test_range)
-    (X_train, Y_train, X_train_unscaled, Y_train_unscaled)  = preprocess_files(symbol, code, getTrainParameters(train_range))
-    (X_test, Y_test, X_test_unscaled, Y_test_unscaled) = preprocess_files(symbol, code, getTestParameters(test_range))
+    train_begin, train_end = getDateByCount(train_range)
+    test_begin, test_end = getDateByCount(test_range)
+    (X_train, Y_train, X_train_unscaled, Y_train_unscaled)  = preprocess_files(symbol, code,  train_begin, train_end)
+    (X_test, Y_test, X_test_unscaled, Y_test_unscaled) = preprocess_files(symbol, code, test_begin, test_end)
 
     if output_filename is not None and os.path.exists(output_filename+".json"):
         my_model = load(output_filename + ".json", output_filename + ".h5")

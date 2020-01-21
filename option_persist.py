@@ -15,11 +15,10 @@ from optionML import getResultByType
 from trade_api.tda_api import Td
 from analyze_historical import OptionStats
 import timedelta
-<<<<<<< HEAD
 from util import debug_print, append_df, load_watch_lists
-from trade_api.db_api import read_one_stock_quote, getStockDesc, get_stock_price_history, recordExists
+from trade_api.db_api import read_one_stock_quote, getStockDesc, get_stock_price_history, recordExists, check_persist_timing, construct_day_filter
 from trade_api.calculate_iv import newton_vol_call,newton_vol_put,newton_vol_call_div,newton_vol_put_div
-
+collection_name = 'optionstat'
 DEBUG_LEVEL = 1
 
 def construct_option_symbol(x):
@@ -80,9 +79,10 @@ def convertType(x):
     else:
         return 'put'
 
+
 def find_strikes_min_max(all_strikes, strikeCount, stockPrice):
     index = 0
-    all_strikes = np.sort(np.unique(all_strikes))
+    all_strikes = np.sort(all_strikes)
     for p in all_strikes:
         if p < stockPrice:
             index += 1
@@ -98,18 +98,7 @@ def find_strikes_min_max(all_strikes, strikeCount, stockPrice):
     return (all_strikes[strike_min_index], all_strikes[strike_max_index])
 
 
-def filter_df_by_count(df, strikeCount, underlyingPrice):
-    expDates = np.unique(df.exp_date)
-    df_return = None
-    for d in expDates:
-        df_curr = df[df.exp_date == d]
-        df_strikes = df_curr.Strike
-        (min_strike, max_strike) = find_strikes_min_max(df_strikes, strikeCount,underlyingPrice)
-        df_curr = df_curr[df_curr.Strike >= min_strike]
-        df_curr = df_curr[df_curr.Strike <= max_strike]
-        debug_print("d, shape", d, df_curr.shape)
-        df_return = append_df(df_return, df_curr)
-    return df_return
+
 
 
 def check_option_symbol(x, symbol):
@@ -123,7 +112,7 @@ def compute_iv_single_row(x):
     s = x.UnderlyingSymbol
     y = x.divYield
     sigma = read_one_stock_quote(s, x.data_date, "implied vol")
-
+    #print(sigma)
     if x.Type == "c":
         if y == 0:
             return newton_vol_call(x.UnderlyingPrice, x.Strike, x.days_to_expire, x.Bid, interest_rate, sigma)
@@ -145,11 +134,11 @@ def computeOptionHist(df, symbol):
         d_str = df.data_date[0].strftime("%Y%m%d")
         #df.to_csv('data' + os.sep + symbol + os.sep + d_str + "_option_chain.csv")
 
-    df_call = df[df.Type == 'c']
-    df_put = df[df.Type == 'p']
+    df_call = df.loc[df.Type == 'c']
+    df_put = df.loc[df.Type == 'p']
 
     df_call = df_call.sort_values(by=["days_to_expire", "Strike"])
-    df_put = df_call.sort_values(by=["days_to_expire", "Strike"])
+    df_put = df_put.sort_values(by=["days_to_expire", "Strike"])
 
     df_call_aggr = OptionStats.groupby_columns_from_detail(df_call, OptionStats.aggregate_optionstats_from_detail)
     df_put_aggr = OptionStats.groupby_columns_from_detail(df_put, OptionStats.aggregate_optionstats_from_detail)
@@ -199,7 +188,7 @@ def persist_optionistics_file(df, symbol, d_cur, m):
         print("Error happens when renaming columns")
         exit(1)
     #debug_print("df.columns, df.shape", df.columns, df.shape)
-    if recordExists('optionstat', {'$and': [{'symbol': {'$eq': symbol}}, {'date': {'$eq': d_cur}}]}):
+    if recordExists(collection_name, {'$and': [{'symbol': {'$eq': symbol}}, {'date': {'$eq': d_cur}}]}):
         print("already exist", symbol, d_cur.strftime('%Y%m%d'))
         return 0
     stock_closing_price = read_one_stock_quote(symbol, d_cur, "close")
@@ -213,13 +202,13 @@ def persist_optionistics_file(df, symbol, d_cur, m):
     df["exp_date"] = df["expirationDate"].apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%d'))
     df = derive_columns(df, d_cur)
     df = df[df.days_to_expire<= 90]
-    df = df[df.exp_week == 3]
+    df = df[(df.exp_week ==3) | (df.exp_week ==4)]
     df = filter_df_by_count(df, 30, stock_closing_price)
     y = get_stock_yield(symbol)
     df["divYield"] = y
     #debug_print(df.shape)
     df_curstat = computeOptionHist(df, symbol.upper())
-    m.write_df(df_curstat, 'optionstat')
+    m.write_df(df_curstat, collection_name)
     num_stats_rec_inserted = df_curstat.shape[0]
     return num_stats_rec_inserted
 
@@ -239,7 +228,7 @@ def persist_td_option_file(df, symbol, d_cur, m):
                                 "volatility": "IV"})
     except KeyError:
         print("error happens at renaming")
-    if recordExists('optionstat', {'$and': [{'symbol':{'$eq': symbol}}, {'date':{'$eq': d_cur}}]}):
+    if recordExists(collection_name, {'$and': [{'symbol':{'$eq': symbol}}, {'date':{'$eq': d_cur}}]}):
         print("already exist", symbol, d_cur.strftime('%Y%m%d'))
         return 0
 
@@ -258,12 +247,12 @@ def persist_td_option_file(df, symbol, d_cur, m):
     y = get_stock_yield(symbol)
     df["divYield"] = y
     df_stats_out = computeOptionHist(df, symbol)
-    m.write_df(df_stats_out, 'optionstat')
+    m.write_df(df_stats_out, collection_name)
     num_stats_rec_inserted = df_stats_out.shape[0]
     return num_stats_rec_inserted
 
 
-def persist_option_dirs(dirName, symbols):
+def persist_option_dirs(dirName, symbols, pattern):
     debug_print("reading", dirName)
     m = mongo_api()
     num_stats_rec_inserted = 0
@@ -274,7 +263,11 @@ def persist_option_dirs(dirName, symbols):
         print("len files", len(files))
         for fi in files:
             (file_type, d_cur, curr_symbol, fi) = determine_file_origin(root, fi)
-            print("file origin", file_type)
+            #print("file origin", file_type)
+            if pattern is not None and fi.find(pattern) == -1:
+                #print("file not in pattern", fi)
+                continue
+
             if curr_symbol not in symbols:
                 debug_print("skipped symbol ", curr_symbol)
                 continue
@@ -292,9 +285,8 @@ def persist_option_dirs(dirName, symbols):
     print("number of records inserted to optionhist", num_stats_rec_inserted)
 
 
-def find_dates(df_symbol, symbol):
+def find_dates(df_symbol, symbol,df_in_optionstats):
     m = mongo_api()
-    df_in_optionstats = m.read_df('optionstat', False, ["date"], [], {'symbol': {'$eq': symbol}},{'date': 1})
     date_set3 = set([])
     date_set2 = set(df_symbol.data_date)
     if df_in_optionstats.shape[0] >0:
@@ -307,46 +299,70 @@ def find_dates(df_symbol, symbol):
     return diff_2
 
 
+def filter_df_by_count(df, strikeCount, underlyingPrice):
+    expDates = set(df.exp_date)
+    for d in expDates:
+        df_curr = df.loc[df["exp_date"] == d]
+        df_strikes = df_curr.Strike
+        (min_strike, max_strike) = find_strikes_min_max(df_strikes, strikeCount,underlyingPrice)
+        drop_index = df_curr.loc[(df_curr.Strike < min_strike) | (df_curr.Strike > max_strike)].index
+        df.drop(drop_index, inplace=True)
+        debug_print("d, shape", d, df_curr.shape, df.shape)
+    return df
+
+
 count_threshold = 35*3*2
-def insert_one_symbol(df, s, m):
+def insert_one_symbol(df, s, m, df_in_optionstats):
     debug_print("persist for symbol", s)
-    df_cur_symbol = df[df.UnderlyingSymbol == s]
-    dates_stats = find_dates(df_cur_symbol, s)
+    df_cur_symbol = df.loc[df.UnderlyingSymbol == s]
+    df_cur_symbol_in_optionstats = df_in_optionstats.loc[df_in_optionstats["symbol"] == s]
+    dates_stats = find_dates(df_cur_symbol, s, df_cur_symbol_in_optionstats)
     df_stats_out = None
     num_d = 1
     for d in dates_stats:
         d_datetime = pd.to_datetime(d)
-        cur_df = df_cur_symbol[df_cur_symbol.data_date == d_datetime]
+        cur_df = df_cur_symbol.loc[df_cur_symbol.data_date == d_datetime]
         stock_closing_price = np.min(cur_df["UnderlyingPrice"])
-        cur_df = cur_df[cur_df.exp_week == 3]
-        cur_df = cur_df[cur_df.days_to_expire <= 90]
         cur_df = filter_df_by_count(cur_df, 30, stock_closing_price)
         df_cur_stat = computeOptionHist(cur_df, s)
+        if df_cur_stat.shape[0] > 1:
+            print("wrong duplicates", df_cur_stat, d, s)
+            exit(1)
         df_stats_out = append_df(df_stats_out, df_cur_stat)
         num_d += 1
     if df_stats_out is not None and df_stats_out.shape[0] > 0:
-        m.write_df(df_stats_out, 'optionstat')
-        x = df_stats_out.shape[0]
-        del df_stats_out
-        return x
-    return 0
+        return df_stats_out
+    return None
+
 
 def persist_option_hist_file(fileName, symbols):
     df = pd.read_pickle(fileName)
-    #debug_print(df.columns)
+    df_out = None
     num_stats = 0
     if df is not None:
         m = mongo_api()
         df = df.drop("Expiration", axis=1)
-        if symbol is not None:
-            df = df[df.UnderlyingSymbol == symbol]
-        dates = np.unique(df.data_date)
-        print("df.shape", df.shape)
-        for d in dates:
-            cur_df = df[df.data_date == d]
-            stock_closing_price = np.min(cur_df["UnderlyingPrice"])
-            cur_df = filter_df_by_count(cur_df, 50, stock_closing_price)
-            m.write_df(cur_df, "optionhist")
+        if symbols is not None:
+            df = df.loc[df.UnderlyingSymbol.isin(symbols)]
+        dates = set(df.data_date)
+        #print("df.shape", df.shape)
+        df = df.sort_values(['UnderlyingSymbol', 'data_date'])
+        sCount = 0
+
+                #stock_closing_price = np.min(cur_df["UnderlyingPrice"])
+        drop_index = df.loc[(df.exp_week != 3) |  (df.days_to_expire > 90)].index
+        if len(drop_index) > 0:
+            df.drop(drop_index, in_place=True)
+
+        df_inserted = None
+        total_recs = 0
+        df_in_optionstats = m.read_df(collection_name, False, ["date", "symbol"], [], {},  {'symbol':1, 'date': 1})
+        for s in symbols:
+            cur_dif = insert_one_symbol(df, s, m, df_in_optionstats)
+            if cur_dif is not None and cur_dif.shape[0] > 1:
+                m.write_df(cur_dif, collection_name)
+                total_recs += cur_dif.shape[0]
+                print("inserted", total_recs)
 
 
 def main(argv):
@@ -354,12 +370,14 @@ def main(argv):
     dirName = None
     symbol = None
     symbols = []
+    pattern = None
+    skipped_list = ["SPY", "USO", "IWM", "QQQ", "DIA", "DOW", "DD", "VIAB", 'KHC', 'UAA', 'HPE', 'ARNC', 'PYPL']
     try:
-        opts, args = getopt.getopt(argv, "hf:d:s:w:",
-                                   ["help", "f=", "d=", "s="])
+        opts, args = getopt.getopt(argv, "hf:d:s:w:p:",
+                                   ["help", "f=", "d=", "s=", "p="])
         for opt, arg in opts:
             if opt == '-h':
-                print(sys.argv[0] + '-f <filename> -d <dirName> -s <symbol> -w <watch_list>')
+                print(sys.argv[0] + '-f <filename> -d <dirName> -s <symbol> -w <watch_list> -p <pattern>')
                 sys.exit()
             if opt == '-f':
                 print("getting file", arg)
@@ -368,16 +386,23 @@ def main(argv):
                 dirName = arg
             if opt == '-s':
                 symbol = arg
-                symbols = load_json_for_symbol(symbol)
-
+                symbols = [symbol]
+            if opt == '-p':
+                pattern = arg
             if opt == '-w':
                 watch_list_file = arg
                 symbols = load_watch_lists(watch_list_file)
+                symbols = list(set(symbols) - set(skipped_list))
         if symbols is not None:
             symbols = np.sort(symbols)
         if len(symbols) == 0:
             print("please specifiy symbol as -s or -w")
             exit(-1)
+        today = datetime.datetime.today()
+        date_filter = construct_day_filter(today)
+        m = mongo_api()
+        if not check_persist_timing(m, collection_name, date_filter, today):
+            return
         if fileName is not None and os.path.exists(fileName):
             persist_option_hist_file(fileName, symbols)
         elif fileName is not None and not os.path.exists(fileName):
@@ -385,7 +410,7 @@ def main(argv):
             exit(-1)
         if dirName is not None:
             try:
-                persist_option_dirs(dirName, symbols)
+                persist_option_dirs(dirName, symbols, pattern)
             except KeyError:
                 print("Error when reading option_dirs")
                 exit(-1)

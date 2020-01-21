@@ -7,7 +7,7 @@ import tarfile
 import calendar
 
 from util import load_watch_lists, delta_days
-
+skipped_list = ["SPY", "USO", "IWM", "QQQ", "DIA", "DOW", "DD", "VIAB", 'KHC', 'UAA', 'HPE', 'ARNC', 'PYPL']
 calendar.setfirstweekday(6)
 
 
@@ -33,6 +33,10 @@ class OptionStats:
         self.d_begin = datetime.strptime(date_begin, "%Y%m%d")
         self.d_end = datetime.strptime(date_end, "%Y%m%d")
         self.all_quotes = quotes
+        if len(self.all_quotes) > 0:
+            for x in skipped_list:
+                if x in self.all_quotes:
+                    self.all_quotes.remove(x)
         if os.path.exists(raw_df_path) and os.path.isfile(raw_df_path):
             self.raw_df = pd.read_pickle(raw_df_path)
             self.stock_raw_df = pd.read_pickle(raw_df_path + '_stock')
@@ -57,6 +61,7 @@ class OptionStats:
 
     @staticmethod
     def calculate_intrinsic_value(x):
+        intrinsic_value = 0
         strike = x["Strike"]
         if (x["Type"] == 'call' and x["Strike"] > x["UnderlyingPrice"]) or (x["Type"] == 'put' and x["Strike"] < x["UnderlyingPrice"]):
             intrinsic_value = 0
@@ -83,12 +88,17 @@ class OptionStats:
 
     @staticmethod
     def week_number_of_month(date_value):
-        return (date_value.isocalendar()[1] - date_value.replace(day=1).isocalendar()[1] + 1)
+        month_begin = date_value.replace(day=1).isocalendar()
+        if month_begin[2] <= 5:
+            return (date_value.isocalendar()[1] - date_value.replace(day=1).isocalendar()[1] + 1)
+        else:
+            return (date_value.isocalendar()[1] - date_value.replace(day=1).isocalendar()[1])
 
     def add_detail_day(self,d, df, analyze_option):
         d_cur = datetime.strptime(d, "%Y%m%d")
         df = df.drop(['OptionExt','Gamma','Vega'], axis=1)
         df = df[df["UnderlyingSymbol"].isin(self.all_quotes)]
+
         #df = df[(df["Delta"] > 0.4) | (df["Delta"] > -0.3)]
         df = df[(df["days_to_expire"] < 90)]
         df = OptionStats.extract_expiration_date(df)
@@ -98,12 +108,21 @@ class OptionStats:
             df.exp_date.apply(lambda x: x.month), \
             df.exp_date.apply(lambda x: OptionStats.week_number_of_month(x)), \
             df.exp_date.apply(lambda x: x.day)
-
+        df_out = df
         if analyze_option.find("monthly") > 0:
-            df = df[df["exp_week"] == 3]
-        df["intrinsic_value"] = df.apply(lambda x: OptionStats.calculate_intrinsic_value(x), axis=1)
-        df["time_value"] = df.apply(lambda x: OptionStats.calculate_time_value(x), axis=1)
-        self.opdetail_raw_df = self.append_to_raw_df(self.opdetail_raw_df, df)
+            df_out  = df[df["exp_week"] == 3]
+        if df_out.shape[0] <= 0:
+            print("missing 3rd weeks", np.unique(df.exp_week))
+            df_out = df
+        if df_out.shape[0] > 0:
+            df_out["intrinsic_value"] = df_out.apply(lambda x: OptionStats.calculate_intrinsic_value(x), axis=1)
+            df_out["time_value"] = df_out.apply(lambda x: OptionStats.calculate_time_value(x), axis=1)
+            set_diff = set(self.all_quotes) - set(np.unique(df_out.UnderlyingSymbol))
+            if len(set_diff) > 0:
+                print("wrong date", d, set_diff)
+            self.opdetail_raw_df = self.append_to_raw_df(self.opdetail_raw_df, df_out)
+
+
         return self.opdetail_raw_df.shape[0]
 
     @staticmethod
@@ -256,11 +275,10 @@ def preprocess_files(all_quotes, opstats, datadir, prefix, outputfile, analyze_o
     total_file_processed = 0
     print("starting , prefix =", prefix, datadir)
     for (root,dirs,files) in os.walk(datadir, topdown=True):
+        files = np.sort(files)
         for f in files:
             original_f = f
-
             f = datadir + os.sep + f
-
             if analyze_options.startswith('DETAIL') and original_f[0:8] == 'options_':
                 if prefix != '' and original_f[8:12] != prefix:
                     continue
