@@ -17,6 +17,15 @@ def append_df(df_out, df):
         df_out = df_out.append(df, ignore_index=True)
     return df_out
 
+def drop_columns(df, columnName):
+    if type(columnName) == str and columnName in df.columns:
+        return df.drop(columnName, axis=1)
+    elif type(columnName) == list:
+        for c in columnName:
+            if c in df.columns:
+                df = df.drop(c, axis=1)
+    return df
+
 def get_daily_symbols(watch_file_list):
     for f in watch_file_list:
         w = Td.load_json_file(f)

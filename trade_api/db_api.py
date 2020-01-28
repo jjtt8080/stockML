@@ -63,8 +63,8 @@ def get_stock_price_history(symbol, currDate):
         exit(1)
 
 
-def check_persist_timing(m, collection_name, date_filter, today):
-    if Td.is_trading_day(today) and not Td.is_market_open(today) and m.countDistinct(collection_name, date_filter) == 0:
+def check_persist_timing(m, collection_name, projection, date_filter, today):
+    if Td.is_trading_day(today) and not Td.is_market_open(today) and m.countDistinct(collection_name, projection, date_filter) == 0:
         print("Persisting due to 0 records in db for today")
         return True
     else:

@@ -35,8 +35,8 @@ fmt = "%Y-%m-%d"
 DEBUG_LEVEL = 1
 
 ## Define some model parameters
-STEP_SIZE = 90
-predicted_range = 3
+STEP_SIZE = 60
+predicted_range = 5
 NUM_FEATURES = 4
 def debug_print(*argv):
     if DEBUG_LEVEL==1:
@@ -87,7 +87,7 @@ def resetHour(x):
 
 def convertDate(t):
     ## For some reason FIN API's stock date is 1 day ahead
-    dateS = datetime.datetime.fromtimestamp(float(t))  + datetime.timedelta(days=1)
+    dateS = datetime.datetime.fromtimestamp(float(t)) + datetime.timedelta(days=1)
     dateS = resetHour(dateS)
     return dateS
 
@@ -115,7 +115,7 @@ def computeOptionHist(symbol, startDate, endDate):
 
 
 def getOptionHist(symbol, startDate, endDate):
-    projectionAttrs = ["date", 'max_vol_call', 'max_vol_put', 'mean_vol_call', 'mean_vol_put', 'mean_oi_call', 'mean_oi_put']
+    projectionAttrs = ["date", 'max_vol_call', 'max_vol_put', 'mean_vol_call', 'mean_vol_put', 'mean_oi_call', 'mean_oi_put', 'median_iv_call']
     projectionMeasures = []
     filter = {'symbol': {'$eq': symbol}}
     sortSpec = {'symbol': 1, 'date': 1}
@@ -129,6 +129,8 @@ def getOptionHist(symbol, startDate, endDate):
 
 
 def compare_dif(stockDf, optionDf):
+    stockDf["date"] = stockDf.date.apply(lambda x: resetHour(x))
+    optionDf["date"] = optionDf.date.apply(lambda x: resetHour(x))
     stock_date = set(stockDf.date)
     option_date = set(optionDf.date)
     diff2 = stock_date - option_date
@@ -179,7 +181,7 @@ def preprocess_files(symbol, code, begin, end):
     t_set_vol = dataset.loc[:,"volume"].values
     o_set = optionHist["put_ratio"].values
     o_set = o_set.reshape(-1,1)
-    o_set_vol = optionHist["callvoi"].values
+    o_set_vol = optionHist["median_iv_call"].values
     o_set_vol = o_set_vol.reshape(-1,1)
     t_set = t_set.reshape(-1, 1)
     t_set_scaled = sc.fit_transform(t_set)
@@ -194,10 +196,16 @@ def preprocess_files(symbol, code, begin, end):
     steps = 0
     for i in range(STEP_SIZE, t_set.shape[0]-predicted_range):
         for j in range(i-STEP_SIZE, i):
-            X.append((t_set_scaled[j,0],  t_set_vol_scaled[j, 0], o_set_scaled[j,0], o_vol_scaled[j,0]))
+            if NUM_FEATURES == 4:
+                X.append((t_set_scaled[j,0],  t_set_vol_scaled[j, 0], o_set_scaled[j,0], o_vol_scaled[j,0]))
+            elif NUM_FEATURES == 1:
+                X.append(t_set_scaled[j, 0])
+            else:
+                print("error # of feature")
+                exit(1)
             X_unscaled.append((t_set[j,0], t_set_vol[j,0]))
-        Y.append(t_set_scaled[i+1:i+predicted_range, 0])
-        Y_unscaled.append(t_set[i+i:predicted_range,0])
+        Y.append(t_set_scaled[i:i+predicted_range, 0])
+        Y_unscaled.append(t_set[i:predicted_range,0])
         steps +=1
     X_t, Y_t = np.array(X), np.array(Y)
     X_t = X_t.reshape(steps, STEP_SIZE, NUM_FEATURES)
@@ -215,7 +223,7 @@ def model(X_train, y_train):
     regressor.add(Dropout(0.2))
     regressor.add(LSTM(units=40))
     regressor.add(Dropout(0.2))
-    regressor.add(Dense(units=2))
+    regressor.add(Dense(units=predicted_range))
     regressor.compile(optimizer='adam', loss='mean_squared_error')
     regressor.fit(X_train, y_train, epochs=20, batch_size=16)
     return regressor;
@@ -256,11 +264,11 @@ def main(argv):
     my_modele  = None
 
     try:
-        opts, args = getopt.getopt(argv, "hs:d:c:o:w:",
-                                   ["help", "symbol=",  "date_range=", "code=", "output=", "watchlist="])
+        opts, args = getopt.getopt(argv, "hs:d:c:o:w:f:",
+                                   ["help", "symbol=",  "date_range=", "code=", "output=", "watchlist=", "features_num="])
         for opt, arg in opts:
             if opt == '-h':
-                print(sys.argv[0] + '-s <symbol> -d <date_range> -c <code>  -o output -w <watch_list>')
+                print(sys.argv[0] + '-s <symbol> -d <date_range> -c <code>  -o output -w <watch_list> -f <NUM_FEATURES>')
                 sys.exit()
             elif opt in ("-s", "--symbol"):
                 symbol = arg
@@ -272,7 +280,8 @@ def main(argv):
                 output_filename = arg
             elif opt in ("-w", "--watchlist"):
                 watch_list = arg
-
+            elif opt in ("-f", "--features_num"):
+                NUM_FEATURES = np.int(arg)
     except getopt.GetoptError:
         print('predictive_model.py -s symbolName -d <date_range, can be 1, 2, 3, 4, 5 year> -c<passcode> -o<output> -w<watchlistfile>')
         sys.exit(2)

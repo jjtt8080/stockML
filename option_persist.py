@@ -260,7 +260,7 @@ def persist_option_dirs(dirName, symbols, pattern):
         if root == 'historical':
             continue
         files = np.sort(files)
-        print("len files", len(files))
+        #print("len files", len(files))
         for fi in files:
             (file_type, d_cur, curr_symbol, fi) = determine_file_origin(root, fi)
             #print("file origin", file_type)
@@ -401,8 +401,8 @@ def main(argv):
         today = datetime.datetime.today()
         date_filter = construct_day_filter(today)
         m = mongo_api()
-        if not check_persist_timing(m, collection_name, date_filter, today):
-            return
+        #if not check_persist_timing(m, collection_name, date_filter, today):
+        #    return
         if fileName is not None and os.path.exists(fileName):
             persist_option_hist_file(fileName, symbols)
         elif fileName is not None and not os.path.exists(fileName):

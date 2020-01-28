@@ -8,12 +8,12 @@ from trade_api.mongo_api import mongo_api
 sys.path.append(".")
 from optionML import getResultByType
 from trade_api.tda_api import Td
-from util import debug_print, append_df, load_watch_lists
+from util import debug_print, append_df, load_watch_lists, drop_columns
 import os
 import requests
 import trade_api.db_api as db_api
 collection_name = 'stockcandles'
-
+pickles_dir = 'stock_pickles'
 STOCK_HIST_FILE_PATH = 'data/historical//pickles/stockhist'
 
 def get_market_days():
@@ -231,7 +231,7 @@ def update_multiple_date_close(df, dates, prev_df, symbols):
     return df_out
 
 
-def get_daily_stock_for_symbols(symbols, error_symbols, day_range):
+def get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range):
     df_out = None
     symbol_count = 0
     d = Td.get_prev_trading_day(datetime.datetime.today())
@@ -239,112 +239,157 @@ def get_daily_stock_for_symbols(symbols, error_symbols, day_range):
 
     #assert(yesterday_frame.shape[0] == len(symbols))
     for symbol in symbols:
+        if symbol in done_symbols:
+            continue
         try:
-            #print("getting", symbol)
-            df = getResultByType('price_history', '2048', symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
+            print("getting", symbol)
+            #first we use the finn API
+            df = getResultByType('price_history', None, symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
             if df is None:
-                error_symbols.append(symbol)
+                print("add to error symbols", symbol)
+                error_symbols.add(symbol)
                 continue
-            df["symbol"] = symbol
             df["date"] = df.t.apply(lambda x: datetime.datetime.fromtimestamp(np.int(x)) + datetime.timedelta(days=1))
-            df = df.rename(columns = {"o": "open", "c": "close", "h": "high", "l": "low", "v": "volume"})
+            df["keep_flg"] = df["date"].apply(lambda x: x.hour == 21)
+            #print("before drop keep_flg", df.shape)
+            #df = df[df["keep_flg"] == True]
+            #print("after drop keep_flg", df.shape)
+            df = df.drop("s", axis=1)
+            df = df.drop("t", axis=1)
+            df = df.drop("keep_flg",axis=1)
+            if "c" in df.columns and "o" in df.columns:
+                df = df.rename(columns={"o": "open", "c": "close", "h": "high", "l": "low", "v": "volume"})
+            if df is None or df.shape[0] == 0:
+                df_td = getResultByType('price_history', '2048', symbol, "{\"periodType\": \"month\",\"frequencyType\": \"daily\", \"period\":1, \"frequency\": 1}")
+                df_td = df_td[df_td.index == max(df_td.index)]
+                df = df_td.rename(columns={"datetime":"date"})
+                if df is None:
+                    error_symbols.add(symbol)
+                    continue
+            df["symbol"] = symbol
+
             d_index, month, year = df.date.apply(lambda x: x.day), \
                                    df.date.apply(lambda x: x.month), \
                                    df.date.apply(lambda x: x.year)
             df["d_index"] = d_index
             df["month"] = month
             df["year"] = year
-            df = df.drop("s", axis=1)
-            df = df.drop("t", axis=1)
             df = calculate_spread(df, False)
             #prev_close = yesterday_frame[yesterday_frame["symbol"] == symbol].iloc(0)
             #df = calculate_chg(df, prev_close)
             df_out = append_df(df_out, df)
             symbol_count += 1
+            if symbol in error_symbols:
+                error_symbols.remove(symbol)
+            done_symbols.add(symbol)
             if symbol_count % 30 == 0:
                 print("current processed ", symbol_count, " symbols")
                 time.sleep(3)
         except requests.exceptions.SSLError:
-            error_symbols.append(symbol)
+            error_symbols.add(symbol)
             time.sleep(3)
             continue
         except json.decoder.JSONDecodeError:
-            error_symbols.append(symbol)
+            error_symbols.add(symbol)
             time.sleep(3)
             continue
     return df_out
 
 
-def persist_daily_stock(day_range, symbol = None):
+def compose_file_name(d):
+    day_str = d.strftime('%Y-%m-%d')
+    filename = pickles_dir + os.sep +  'stock.pickle' + day_str
+    if os.path.exists(filename):
+        day_str = d.strftime('%Y-%m-%d-%h:%M:%s')
+        filename = 'stock.pickle' + day_str
+    return filename
 
-    #check if
 
-    df_out = None
+def post_processing(df_all, symbols, error_symbols):
+    if df_all is not None and df_all.shape[0] > 0:
+        print("saving...")
+        #today_str = datetime.datetime.today().strftime('%Y-%m-%d')
+        dates = list(set(df_all["date"]))
+        first_day_str = min(dates).strftime('%Y-%m-%d')
+        yesterday = Td.get_prev_trading_day(min(dates))
+        yesterday_str = yesterday.strftime("%Y-%m-%d")
+        yesterday_frame = None
+        print("yesterday_str", yesterday_str)
+        if os.path.exists('stock.pickle' + yesterday_str):
+            yesterday_frame = pd.read_pickle( pickles_dir + os.sep + 'stock.pickle' + yesterday_str)
+
+        if yesterday_frame is not None:
+            if len(dates) > 1:
+                df_all["delete_flg"] = df_all.date.apply(lambda x: x.hour == 16)
+                print("detect multiple dates", df_all.shape)
+                df_all = df_all[df_all["delete_flg"] == False]
+                dates = list(np.unique(df_all["date"]))
+
+                df_all = update_multiple_date_close(df_all, dates, yesterday_frame, symbols)
+            else:
+                df_all = update_close_for_df(symbols, df_all,yesterday_frame )
+        #m.write_df(df_out, collection_name)
+
+        df_all["delete_flag"] = df_all.date.apply(lambda x: (x.hour == 16))
+        df_all["keep_flag"] = df_all.date.apply(lambda x: (x.hour == 21))
+
+        df_keep = df_all[df_all["keep_flag"] == True]
+        print("df_keep.shape", df_keep.shape)
+        df_discard = df_all[df_all["delete_flag"] == True]
+        print("df_discard.shape", df_discard.shape)
+        df_keep = drop_columns(df_keep, ["delete_flag", "keep_flag"])
+        df_discard = drop_columns(df_discard,  ["delete_flag", "keep_flag"])
+        m = mongo_api()
+        if df_keep.shape[0] > 0:
+            for d in set(df_keep.date):
+                filename = compose_file_name(d)
+                df_keep[df_keep["date"] == d].to_pickle(filename)
+                m.write_df(df_keep, collection_name)
+                print("total # of rows written, error symbols", df_keep.shape[0], len(error_symbols))
+        if df_discard.shape[0] > 0:
+            for d in set(df_discard.date):
+                filename = compose_file_name(d) + "_discard"
+                df_discard[df_discard["date"] == d].to_pickle(filename)
+                print("total # of rows written for timestamp 16:00:00, error symbols", df_discard.shape[0], len(error_symbols))
+
+def persist_daily_stock(day_range, watch_list_file, symbol = None):
+    skipped_set = {"VIAB", "CBS", "BBT"}
+    df_all = None
     if symbol is None:
-        symbols = load_watch_lists("data/highvol_watchlist.json")
+        symbols = load_watch_lists(watch_list_file)
     else:
         symbols = [symbol]
     day_range = str(day_range)
     m = mongo_api()
     today = datetime.datetime.today()
     date_filter = db_api.construct_day_filter(today)
-    if not db_api.check_persist_timing(m, 'optionstat', date_filter, today):
-        return
-    error_symbols = []
+    projection = "date"
+    #if not db_api.check_persist_timing(m, 'optionstat', projection, date_filter, today):
+    #    return
+    error_symbols = set()
     symbols = np.sort(symbols)
     retryCount = 0
-
-    while(1):
-        df= get_daily_stock_for_symbols(symbols, error_symbols, day_range)
-        df_out = append_df(df_out, df)
-        retry_count = 0
-        if (len(error_symbols) == 0 or df_out.shape[0] == len(symbols) or retry_count >= 3):
+    symbols_set = set(symbols)
+    for skip_s in skipped_set:
+        if skip_s in symbols_set:
+            symbols_set.remove(skip_s)
+    symbols = list(symbols_set)
+    done_symbols = set()
+    retry_count = 0
+    while(len(done_symbols) != len(symbols)):
+        df= get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range)
+        df_all = append_df(df_all, df)
+        if (len(error_symbols) == 0 or df_all.shape[0] == len(symbols) or retry_count >= 3):
+            post_processing(df_all,symbols, error_symbols)
             break
         else:
-            print("error symbols, continuing", error_symbols)
+            post_processing(df_all, symbols, error_symbols)
+            print("error symbols, continuing, resetting symbols to error_Symbols", error_symbols)
             retry_count = retry_count + 1
 
-    if df_out is not None:
-        print("saving...")
-        today_str = datetime.datetime.today().strftime('%Y-%m-%d')
-        yesterday = Td.get_prev_trading_day(datetime.datetime.today())
-        yesterday_str = yesterday.strftime("%Y-%m-%d")
-        yesterday_frame = None
-        if os.path.exists('stock.pickle_' + yesterday_str):
-            yesterday_frame = pd.read_pickle('yesterday_stock.pickle')
-        dates = list(np.unique(df_out["date"]))
-        if yesterday_frame is not None:
-            if len(dates) > 1:
-                df_out["delete_flg"] = df_out.date.apply(lambda x: x.hour == 16)
-                print("detect multiple dates", df_out.shape)
-                df_out = df_out[df_out["delete_flg"] == False]
-                dates = list(np.unique(df_out["date"]))
-                df_out = df_out.drop("delete_flg", axis=1)
-                print("drop out extra hour frame", df_out.shape)
-                df_out = update_multiple_date_close(df_out, dates, yesterday_frame, symbols)
-            else:
-                df_out = update_close_for_df(symbols, df_out,yesterday_frame )
-        #m.write_df(df_out, collection_name)
-        df_out.to_pickle('stock.pickle' + today_str)
-        print("total # of rows written", df_out.shape[0])
 
 
-persist_daily_stock(4)
-#df = pd.read_pickle('today_stock.pickle')
-#dates = list(np.unique(df["date"]))
-#print(dates)
-#del dates[3]
-#print(dates)
-#today_ts = np.int((pd.Timestamp(dates[0]) - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
-#today = datetime.datetime.fromtimestamp(today_ts)
-#yesterday = Td.get_prev_trading_day(today)
-#m = mongo_api()
-#df_prev = m.read_df(collection_name, False, '*', [], {'$and': [{'symbol': {'$in': symbols}}, {'date': {'$eq': yesterday}}]}, {'symbol': 1, 'date': 1})
-#output_df = update_multiple_date_close(df, dates, df_prev,symbols)
-#output_df.to_pickle('updated.pickle')
-#
-#symbols = load_watch_lists("data/highvol_watchlist.json")
-#print(len(symbols))
-#read_optionistics_stock(symbols, "/home/jane/Downloads/data/200114/")
-#symbols = np.sort(symbols)
-#persist_stock_history_from_file(symbols)
+if sys.argv[1] is None or sys.argv[1] == '':
+    print("Error argument, pass in a watch list name")
+    exit(1)
+persist_daily_stock(1, sys.argv[1])

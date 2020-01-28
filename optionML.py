@@ -99,8 +99,11 @@ def getOptions(parameters, symbol, code):
     return result;
 
 def getDefaultPriceHistoryParameters():
-    return "{\"periodType\": \"day\",\"frequencyType\": \"minute\", \"period\":1, \"frequency\": 15}";
+    return "{\"periodType\": \"day\",\"frequencyType\": \"minute\", \"period\":1, \"frequency\": 15}"
     
+
+def getDailyPriceHistoryParameters():
+    return "{\"periodType\": \"month\",\"frequencyType\": \"daily\", \"period\":1, \"frequency\": 1}"
 
 def generateOutputFileName(outputDir, symbol, requestType):
     todayStr = date.today().strftime('%y%m%d')
@@ -129,8 +132,8 @@ def getResultByType(request_type,code,symbol, parameters, use_td=False):
         result = getOptions(parameters, symbol, code);
 
     elif request_type == 'price_history':
-        td = init_td(code)
-        if parameters == '' or use_td:
+        if code is not None or use_td:
+            td = init_td(code)
             if parameters == '':
                 parameters =  getDefaultPriceHistoryParameters()
             parameters = json.loads(parameters)
@@ -190,7 +193,7 @@ def main(argv):
     symbol = None
     request_type = ''
     parameters = ''
-    code = ''
+    code = None
 
     td = None
     opts = None
