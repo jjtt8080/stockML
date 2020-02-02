@@ -3,20 +3,24 @@
 # Decompiled from: Python 3.7.3 (default, Apr 24 2019, 15:29:51) [MSC v.1915 64 bit (AMD64)]
 # Embedded file name: C:\Users\Umeda\python\stockML\tda_api.py
 # Size of source mod 2**32: 8582 bytes
+import datetime
 import json
-import pandas as pd, numpy as np, requests
-from pandas.io.json import json_normalize
-from os import path
+import os as os
+import os.path
+import sys
 import time
-from monthdelta import monthdelta
-import os as os, os.path, sys, requests, time
-from selenium import webdriver
+from os import path
 from shutil import which
 from urllib import parse as up
-import time
-from dateutil.tz import tzutc
+
+import numpy as np
+import pandas as pd
 import pandas_market_calendars as mcal
-import datetime
+import requests
+from monthdelta import monthdelta
+from pandas.io.json import json_normalize
+from selenium import webdriver
+
 timezone = 'America/Los_Angeles'
 class Td:
     access_token = ''
@@ -323,7 +327,7 @@ class Td:
     @staticmethod
     def get_prev_trading_day(today_date):
         end_date = datetime.datetime.strftime(today_date, '%Y-%m-%d')
-        start_date = datetime.datetime.today() - datetime.timedelta(days=7)
+        start_date = today_date - datetime.timedelta(days=7)
         start_date = datetime.datetime.strftime(start_date, '%Y-%m-%d')
         schedules = Td.get_market_hour(start_date, end_date)
         schedules = schedules.reset_index()

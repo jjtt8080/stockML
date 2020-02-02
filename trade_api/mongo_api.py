@@ -1,10 +1,11 @@
-import os
-import pandas as pd
-import pymongo
 import getopt
+import os
 import sys
-from pymongo import MongoClient
+
 import bson
+import pandas as pd
+from pymongo import MongoClient
+
 
 class mongo_api:
     def __init__(self, host='localhost', port=27017, database_name = 'trademl'):
@@ -27,12 +28,12 @@ class mongo_api:
 
     def deleteMany(self, collection_name, filter):
         collection = self.db[collection_name]
-        return collection.delete_many(filter)
+        return collection.delete_many(filter).deleted_count
 
     @staticmethod
     def isEmpty(obj):
-        if obj is Null:
-            return True;
+        if obj == {}:
+            return True
         for prop in obj:
             if obj.hasOwnProperty(prop):
                 return False

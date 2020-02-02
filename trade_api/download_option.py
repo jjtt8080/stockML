@@ -1,19 +1,23 @@
-import os as os, os.path, sys, requests, time
+import datetime
+import getopt
+import json
+import os as os
+import os.path
+import pickle
+import sys
+import time
+from shutil import which
+
+import selenium
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
-import selenium
-from shutil import which, copyfile
-import getopt
-import datetime
-from urllib import parse as up
-import time
-import pickle
-import json
+
 sys.path.append("..")
 from trade_api.tda_api import Td
 
 loginurl = "https://www.optionistics.com/secure/ssllogin.pl"
 url = "http://www.optionistics.com/c/download.pl"
+download_dir = "/home/jane/python/tradeML/data_optionistics/"
 options = webdriver.ChromeOptions()
 chrome_driver_binary = which('chromedriver') or '/usr/local/bin/chromedriver'
 
@@ -65,8 +69,8 @@ def download_symbol(url, symbol, start_month, start_day, end_month, end_day, yea
         desc = ".stock."
     date_desc = year + start_month.zfill(2) + start_day.zfill(2)
     filename =  symbol + desc + date_desc + "." + end_month.zfill(2) + end_day.zfill(2) + ".csv"
-    file_path = "/home/jane/Downloads/" + filename
-    file2_path = "home/jane/Downloads/data/" + year + start_month.zfill(2) + start_day.zfill(2) + filename
+    file_path = download_dir + filename
+    file2_path = download_dir + "data" + os.sep + filename
     print("file_path", file_path)
     if os.path.exists(file_path) or os.path.exists(file2_path):
         print("file exists", file_path)
@@ -114,13 +118,14 @@ def download(url, watch_list_file, start_month,start_day,end_month, end_day,year
 
 def load_json_for_symbol(symbol):
     symbols = []
-    if symbol.substr("'") != -1:
+    if symbol.find("'") != -1:
         symbol = symbol.replace("'", "\"")
     symbol = '{\"symbols\":' + symbol + '}'
     if symbol is not None:
         symbols = json.loads(symbol)
         return symbols["symbols"]
     return None
+
 def main(argv):
     symbol = None
     start_date = None
@@ -154,8 +159,8 @@ def main(argv):
 
     login(loginurl, username, password)
     print("start_date.month, start_date.day", start_date.month, start_date.day, end_date.month, end_date.day)
-
-    if watch_list is None:
+    symbols = []
+    if watch_list is None and symbol.find("[") != -1:
         symbols = load_json_for_symbol(symbol)
         print("symbols", symbols)
         if len(symbols) > 0:
@@ -166,6 +171,9 @@ def main(argv):
                 print("getting symbols", s)
                 download_symbol(url, s, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)
     elif symbol is not None:
+        load_cookie(driver, cookie_file)
+        driver.get(url)
+        print("load url", url)
         download_symbol(url, symbol, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)
     if watch_list is not None:
         download(url, watch_list, str(start_date.month), str(start_date.day), str(end_date.month), str(end_date.day), str(start_date.year), type)

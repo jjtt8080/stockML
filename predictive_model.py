@@ -1,21 +1,23 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import sys as sys
-import os as os
-import getopt as getopt
-from sklearn.preprocessing import MinMaxScaler, Normalizer
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM
-from keras.layers import Dropout
-from keras.models import model_from_json
-from trade_api.tda_api import Td as Td
-from optionML import getResultByType
 import datetime
+import getopt as getopt
+import os as os
+import sys as sys
+import time
+
+import numpy as np
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+from keras.layers import Dense
+from keras.layers import Dropout
+from keras.layers import LSTM
+from keras.models import Sequential
+from keras.models import model_from_json
 from monthdelta import monthdelta
+from sklearn.preprocessing import MinMaxScaler
+
+from optionML import getResultByType
 from trade_api.mongo_api import mongo_api
-import timedelta
+from util import set_random_seeds
+
 symbol = None
 request_type = ''
 parameters = ''
@@ -35,9 +37,10 @@ fmt = "%Y-%m-%d"
 DEBUG_LEVEL = 1
 
 ## Define some model parameters
-STEP_SIZE = 60
+STEP_SIZE = 45
 predicted_range = 5
 NUM_FEATURES = 4
+
 def debug_print(*argv):
     if DEBUG_LEVEL==1:
         for arg in argv:
@@ -125,6 +128,8 @@ def getOptionHist(symbol, startDate, endDate):
         print("df.columns", df.columns)
         df = df[(df.date >= startDate) & (df.date <= endDate)]
         print("OptionHistory shape", df.shape, df.columns)
+    else:
+        print("can't find the stats: ", filter, projectionAttrs)
     return df
 
 
@@ -178,6 +183,9 @@ def preprocess_files(symbol, code, begin, end):
             exit(1)
 
     t_set = dataset.loc[:, "close"].values
+    t_set_ch = dataset.loc[:, "chg"].values
+    t_set_ho_spread = dataset.loc[:, "ho_spread"].values
+    t_set_cl_spread = dataset.loc[:"cl_spread"].values
     t_set_vol = dataset.loc[:,"volume"].values
     o_set = optionHist["put_ratio"].values
     o_set = o_set.reshape(-1,1)
@@ -200,6 +208,8 @@ def preprocess_files(symbol, code, begin, end):
                 X.append((t_set_scaled[j,0],  t_set_vol_scaled[j, 0], o_set_scaled[j,0], o_vol_scaled[j,0]))
             elif NUM_FEATURES == 1:
                 X.append(t_set_scaled[j, 0])
+            elif NUM_FEATURES == 7:
+                X.append(t_set_ch)
             else:
                 print("error # of feature")
                 exit(1)
@@ -218,14 +228,16 @@ def preprocess_files(symbol, code, begin, end):
 def model(X_train, y_train):
     regressor = Sequential()
     regressor.add(LSTM(units=STEP_SIZE, return_sequences=True, input_shape=(X_train.shape[1], NUM_FEATURES)))
-    regressor.add(Dropout(0.2))
+    regressor.add(Dropout(0.1))
     regressor.add(LSTM(units=40, return_sequences=True))
-    regressor.add(Dropout(0.2))
+    regressor.add(Dropout(0.1))
     regressor.add(LSTM(units=40))
     regressor.add(Dropout(0.2))
     regressor.add(Dense(units=predicted_range))
-    regressor.compile(optimizer='adam', loss='mean_squared_error')
-    regressor.fit(X_train, y_train, epochs=20, batch_size=16)
+    es = EarlyStopping(monitor='val_accuracy', mode='max', min_delta=1)
+    mc = ModelCheckpoint('best_model.h5', monitor='val_accuracy', mode='max', verbose=0, save_best_only=True)
+    regressor.compile(optimizer='adam', metrics=['accuracy'], loss=['mean_absolute_error'])
+    regressor.fit(X_train, y_train, validation_split=0.15, epochs=20, batch_size=20, callbacks=[es,mc])
     return regressor;
 
 
@@ -291,13 +303,14 @@ def main(argv):
     test_begin, test_end = getDateByCount(test_range)
     (X_train, Y_train, X_train_unscaled, Y_train_unscaled)  = preprocess_files(symbol, code,  train_begin, train_end)
     (X_test, Y_test, X_test_unscaled, Y_test_unscaled) = preprocess_files(symbol, code, test_begin, test_end)
-
-    if output_filename is not None and os.path.exists(output_filename+".json"):
-        my_model = load(output_filename + ".json", output_filename + ".h5")
+    if output_filename is None:
+        output_filename = symbol + "_"
+    real_file_name = output_filename + datetime.datetime.strftime(datetime.datetime.today(), '%y%m%d');
+    if real_file_name is not None and os.path.exists(real_file_name+".json"):
+        my_model = load(real_file_name +  ".json", real_file_name + ".h5")
     else:
-        output_filename = "temp_" + datetime.datetime.strftime(datetime.datetime.today(), '%y%m%d')
         my_model = model(X_train, Y_train)
-        save(my_model, output_filename)
+        save(my_model, real_file_name)
     if len(X_test) <= 0:
         print("Not enough testing data")
         exit(1)
@@ -305,4 +318,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    set_random_seeds()
     main(sys.argv[1:])
+    print(time.process_time())

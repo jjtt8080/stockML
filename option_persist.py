@@ -1,23 +1,21 @@
 # This file persist the option detail data we obtained from optiondata website
 # to the optionhist collection in mongo
 #  it also persist the data we daily grab from tda
-import pandas as pd
-import numpy as np
+import datetime
+import getopt
 import os as os
 import sys as sys
-import json
+
+import numpy as np
+import pandas as pd
+
+from analyze_historical import OptionStats
+from trade_api.calculate_iv import newton_vol_call, newton_vol_put, newton_vol_call_div, newton_vol_put_div
+from trade_api.db_api import read_one_stock_quote, getStockDesc, get_stock_price_history, recordExists, \
+    construct_day_filter
 from trade_api.mongo_api import mongo_api
-import getopt
-import csv
-import datetime
-from analyze_historical import OptionStats
-from optionML import getResultByType
-from trade_api.tda_api import Td
-from analyze_historical import OptionStats
-import timedelta
-from util import debug_print, append_df, load_watch_lists
-from trade_api.db_api import read_one_stock_quote, getStockDesc, get_stock_price_history, recordExists, check_persist_timing, construct_day_filter
-from trade_api.calculate_iv import newton_vol_call,newton_vol_put,newton_vol_call_div,newton_vol_put_div
+from util import debug_print, append_df, load_watch_lists, load_json_for_symbol
+
 collection_name = 'optionstat'
 DEBUG_LEVEL = 1
 
@@ -245,6 +243,7 @@ def persist_td_option_file(df, symbol, d_cur, m):
     #debug_print(df.columns)
     #d_cur = datetime.datetime(d_cur.year, d_cur.month, d_cur.day)
     y = get_stock_yield(symbol)
+    df["IV"] = df["IV"].apply(lambda x: x/100)
     df["divYield"] = y
     df_stats_out = computeOptionHist(df, symbol)
     m.write_df(df_stats_out, collection_name)
@@ -386,12 +385,16 @@ def main(argv):
                 dirName = arg
             if opt == '-s':
                 symbol = arg
-                symbols = [symbol]
+                if symbol.find(",") == -1:
+                    symbols = [symbol]
+                else:
+                    symbols = load_json_for_symbol(symbol)
             if opt == '-p':
                 pattern = arg
             if opt == '-w':
                 watch_list_file = arg
                 symbols = load_watch_lists(watch_list_file)
+                print(symbols)
                 symbols = list(set(symbols) - set(skipped_list))
         if symbols is not None:
             symbols = np.sort(symbols)
