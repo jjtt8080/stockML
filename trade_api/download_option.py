@@ -105,7 +105,9 @@ def download(url, watch_list_file, start_month,start_day,end_month, end_day,year
     driver.get(url)
     if watch_list_file is not None:
         watch_lists = Td.load_json_file(watch_list_file)
-        symbols = watch_lists["high_vol"]
+        for k in watch_lists.keys():
+            symbols = watch_lists[k]
+            break
     for symbol in symbols:
         print("getting symbol", symbol)
         try:

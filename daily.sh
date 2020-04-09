@@ -2,8 +2,7 @@
 datestr=$(date '+%Y-%m-%d')
 source /home/jane/anaconda3/bin/activate
 cd /home/jane/python/tradeML
-python stock_persist.py data/highvol_watchlist.json > dailyoutput/stock_persist_"${datestr}" 2>&1&
-for i in Default sp500 dowjones nasdaq100
+for i in Default sp500 dowjones nasdaq100 financial high_vol
 do 
    filename="data/$i.json"
    echo "getting watch list $filename"

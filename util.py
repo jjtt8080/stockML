@@ -14,6 +14,8 @@ import datetime
 from optionML import getResultByType
 import random
 import time
+import dateutil.relativedelta
+from pathlib import Path
 
 def set_random_seeds():
     os.environ['PYTHONHASHSEED'] = '0'
@@ -111,10 +113,13 @@ def calculate_chg(df2, prev_close=None):
         df2.iloc[0, i] = df2.iloc[0, i2]
     else:
         print(df2["symbol"])
-        if type (prev_close) == pd.core.indexing._iLocIndexer and len(prev_close.obj) > 0:
-            print(prev_close[0])
+        if type (prev_close) == pd.core.indexing._iLocIndexer and len(prev_close.obj)> 0:
+            #print(prev_close[0])
             df2["prev_c"] = prev_close[0]
-            df2["chg"] = df2["close"] - df2["prev_c"]
+            if "close" not in df2.columns:
+                print("can't find close in current df")
+            else:
+                df2["chg"] = df2["close"] - df2["prev_c"]
     return df2
 
 
@@ -126,10 +131,14 @@ def update_close_for_df(symbols, df, prev_df):
             continue
         prev_df_s = prev_df[prev_df["symbol"]==symbol]
         if prev_df_s is None or prev_df_s.shape[0] == 0:
+            output_df = append_df(output_df, today_df)
             continue
         prev_close = prev_df_s["close"].iloc(0)
         today_df = calculate_chg(today_df, prev_close)
         output_df = append_df(output_df, today_df)
+    if output_df is None:
+        print("Can't find prev_dev or df", df, prev_df)
+        output_df = df
     return output_df
 
 def calculate_spread(df2, prev_close=True):
@@ -142,7 +151,9 @@ def calculate_spread(df2, prev_close=True):
     return df2
 
 def post_process_ph_df(df, symbol):
-    if "t" in df.columns:
+    if "t" in df.columns and df.shape[0] > 0:
+        if df[df.t.isna()].shape[0] > 0:
+            print("wrong t", df.t, symbol)
         df["date"] = df.t.apply(lambda x: datetime.datetime.fromtimestamp(np.int(x)) + datetime.timedelta(days=1))
         df = drop_columns(df, ["s", "t"])
     if "c" in df.columns and "o" in df.columns:
@@ -157,24 +168,65 @@ def post_process_ph_df(df, symbol):
     df = calculate_spread(df, False)
     return df
 
-def get_single_stockcandles(symbol, parameter, df_out):
-    df_symbol = getResultByType('price_history', None, symbol, parameter)
+def calculate_td_parameter_from_finn_parameter(parameter):
+    finn_parameter = json.loads(parameter)
+    from_date = finn_parameter["from"]
+    to_date = finn_parameter["to"]
+    d1 = Td.convert_timestamp_to_time(from_date, "s")
+    d1_date = datetime.date(d1.year, d1.month, d1.day)
+    d2 = Td.convert_timestamp_to_time(to_date, "s")
+    d2_date = datetime.date(d2.year, d2.month, d2.day)
+    delta = dateutil.relativedelta.relativedelta(d1_date, d2_date)
+    count = delta.months + 1
+    td_parameter = {"periodType": "month", "period": count, "frequencyType": "daily", "frequency": 1}
+    td_parameter_str = json.dumps(td_parameter)
+    return td_parameter_str
+
+def get_daily_stock_for_intraday(symbol, input_date):
+    df = getResultByType('price_history', None, symbol, "{\"resolution\": \"60\", \"count\": \"200\"  }")
+    df["date"] = df.t.apply(lambda x: Td.convert_timestamp_to_time(x, 's'))
+    df["keep_flg"] = df["date"].apply(lambda x:  (x.hour >= 6) & (x.hour <=16) & (x.year == input_date.year) & (x.month == input_date.month) & (x.day == input_date.day))
+    df = df[df["keep_flg"] == True]
+    df = df.sort_values("date")
+    df["volume"] = np.sum(df.v)
+    df["high"] = np.max(df.h)
+    df["low"] = np.min(df.l)
+    df["open"] = df["o"].iloc[0]
+    df["close"] = df["c"].iloc[-1]
+    df = drop_columns(df, ["o","c","v", "h", "l", "s", "t"])
+    df["date"] = df.date.apply(lambda x: x.replace(hour=21))
+    df["symbol"] = symbol
+    return df.head(1)
+
+def get_single_stockcandles(symbol, parameter, df_out, useIntraDay = False, input_day = None):
+    df_symbol = None
+    if useIntraDay:
+        df_symbol = get_daily_stock_for_intraday(symbol,input_day)
+    else:
+        df_symbol = getResultByType('price_history', None, symbol, parameter)
     if df_symbol is not None:
         df_symbol["symbol"] = symbol
         df_symbol = post_process_ph_df(df_symbol, symbol)
-        df_symbol["keep_flg"] = df_symbol["date"].apply(lambda x: x.hour == 21)
-        df_symbol = df_symbol.loc[df_symbol["keep_flg"] == True]
-        df_symbol = drop_columns(df_symbol, ["keep_flg"])
         df_out = append_df(df_out, df_symbol)
+    else:
+        print("get_single_stockcandles failed to get history", symbol, parameter, df_out)
     return df_out
 
 
-def get_stockcandles_for_day(d1, d2, watch_list_file_name=None, symbols=None):
+def get_stockcandles_for_day(d1, d2, watch_list_file_name=None, symbols=None, useIntraDay=False):
     d_str_1 = datetime.datetime.strptime(d1, "%Y%m%d")
+    if useIntraDay:
+        d_str_1 = d_str_1.replace(hour=6,minute=30)
     d_str_2 = datetime.datetime.strptime(d2, "%Y%m%d")
+    if useIntraDay:
+        d_str_2 = d_str_2.replace(hour=21,minute=0)
     d1_t = d_str_1.strftime("%s")
     d2_t = d_str_2.strftime("%s")
-    parameter = "{\"resolution\": \"D\", \"from\": \"" + d1_t + "\",\"to\": " + "\"" + d2_t + "\"}"
+    if useIntraDay:
+        parameter = "{\"resolution\": \"D\", \"from\": \"" + d1_t + "\",\"to\": " + "\"" + d2_t + "\"}"
+    else:
+        deltaDays = delta_days(d_str_1, d_str_2)
+        parameter = "{\"resolution\": \"D\",  \"from\": \"" + d1_t + "\",\"count\": " + str(deltaDays) + "}"
     if watch_list_file_name is not None:
         symbols = load_watch_lists(watch_list_file_name)
 
@@ -183,12 +235,19 @@ def get_stockcandles_for_day(d1, d2, watch_list_file_name=None, symbols=None):
     done_symbols = set()
     for symbol in symbols:
         try:
-            df_out = get_single_stockcandles(symbol, parameter, df_out)
-            done_symbols.add(symbol)
+            print("getting ", symbol)
+            df_out = get_single_stockcandles(symbol, parameter, df_out, useIntraDay, d_str_2)
+
+            if df_out is not None and df_out.shape[0] > 0:
+                done_symbols.add(symbol)
+            else:
+                error_symbols.add(symbol)
             if len(done_symbols) % 30 == 0:
                 time.sleep(3)
         except json.decoder.JSONDecodeError:
             error_symbols.add(symbol)
+            continue
+        except KeyError:
             continue
 
 
@@ -196,8 +255,9 @@ def get_stockcandles_for_day(d1, d2, watch_list_file_name=None, symbols=None):
     while len(error_symbols) > 0 and retry <= 3:
         for symbol in error_symbols:
             try:
-                df_out = get_single_stockcandles(symbol, parameter, df_out)
+                df_out = get_single_stockcandles(symbol, parameter, df_out, useIntraDay, d_str_2)
                 if df_out is not None:
+                    df_out = post_process_ph_df(df_out, symbol)
                     done_symbols.add(symbol)
             except json.decoder.JSONDecodeError:
                 continue
@@ -207,7 +267,12 @@ def get_stockcandles_for_day(d1, d2, watch_list_file_name=None, symbols=None):
     print("error on symbols", error_symbols)
     temp = str(random.randint(0,50))
     file_suffix = d_str_2.strftime("%Y-%m-%d")
-    df_out.to_pickle("stock.pickle" + file_suffix + "_" + temp)
+    filename = "stock.pickle" + file_suffix + "_" + temp
+    print("persist to file at get_stockcandles_for_day ", filename)
+    if df_out is not None:
+        df_out.to_pickle(filename)
+    else:
+        print("nothing persisted")
     return df_out
 
 
@@ -219,7 +284,8 @@ def post_processing_for_close(df, d):
                                      {'$and': [{'year': {'$eq': prev_trading_date.year}},\
                                                {'month':{'$eq': prev_trading_date.month}},\
                                                {'d_index': {'$eq': prev_trading_date.day}}]},{})
-    symbols = df.symbol
+    print(df_prev.columns)
+    symbols = set(df_prev["symbol"])
     output_df = update_close_for_df(symbols, df, df_prev)
     output_df["date"] = output_df.date.apply(lambda x: datetime.datetime(x.year, x.month, x.day, 0,0,0))
     return output_df
@@ -243,3 +309,6 @@ def update_close_forall(date_range):
         df_out = append_df(df_out, df_s)
     return df_out
 
+def get_home_dir():
+    home = str(Path.home())
+    return home

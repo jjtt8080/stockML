@@ -7,10 +7,12 @@ import requests
 import json
 from datetime import date
 from datetime import time
+import datetime
 import pandas as pd
 import numpy as np
 import csv
 import os
+from pandas.io.json import json_normalize
 
 DEBUG = 4
 INFO = 2
@@ -61,7 +63,7 @@ class Finnapi:
                     if (Finnapi.any_non_type(o, interestedColumns)):
                         continue
                     o = Finnapi.convertAttrToFloat(o, interestedColumns)
-                    for optionAttr in interesteColumns:
+                    for optionAttr in interestedColumns:
                         r.append(a[optionAttr])
                     df.append(pd.Series(r), ignoreIndex=True)
         df.columns = interestedColumns;
@@ -101,17 +103,21 @@ class Finnapi:
 
     def call_api(self, api_action, params, result_type='json'):
         self.log(DEBUG, 'call_api')
-        self.request_string = 'https://finnhub.io/api/v1/stock/' + api_action + '?symbol=' + self.curr_symbol + '&'
-        for k in params.keys():
-            self.request_string += k
-            self.request_string += '='
-            self.request_string += str(params[k])
-            self.request_string += '&'
+        self.request_string = 'https://finnhub.io/api/v1/' + api_action + '?symbol=' + self.curr_symbol
+        self.request_string += '&'
+        if params != '':
+            for k in params.keys():
+                self.request_string += k
+                self.request_string += '='
+                self.request_string += str(params[k])
+                self.request_string += '&'
 
         self.request_string += 'token='
         self.request_string += self.api_key
         self.log(DEBUG, self.request_string)
+        print("request_string" + self.request_string)
         self.response = requests.get(self.request_string)
+        self.log(DEBUG, self.response)
         res = self.response.json()
         return res
 
@@ -119,15 +125,72 @@ class Finnapi:
         self.log(INFO, 'Getting option chain for symbol ' + self.curr_symbol)
         params = {}
         self.log(DEBUG, params.keys())
-        res = self.call_api('option-chain', params)
+        res = self.call_api('stock/option-chain', params)
         return res
 
     def getCandleStick(self, symbol, option_params):
         param = json.loads(option_params)
         self.curr_symbol = symbol
-        response = self.call_api('candle',  param)
+        print(param)
+        response = self.call_api('stock/candle',  param)
         if response["s"] != 'ok':
             return None
         df = pd.DataFrame(data = response)
         return df
+
+    def getUpDownGrade(self, symbol):
+        self.curr_symbol = symbol
+        response = self.call_api('stock/upgrade-downgrade', '')
+        df = pd.DataFrame(data = response)
+        df = df.sort_values('gradeTime')
+        return df
+
+
+
+    def getPriceTarget(self, symbol):
+        self.curr_symbol = symbol
+        response = self.call_api('stock/price-target', '')
+        df = pd.DataFrame.from_dict(response, orient='index').reset_index().transpose()
+        return df
+
+    def getRecommendations(self, symbol):
+        self.curr_symbol = symbol
+        response = self.call_api('stock/recommendation', '')
+        df = pd.DataFrame(response)
+        df = df.sort_values('period').reset_index()
+        return df
+
+    def getPatterns(self, symbol, params):
+        self.curr_symbol = symbol
+        response = self.call_api('scan/pattern', params)
+        df = pd.DataFrame(data=response)
+        return df
+
+    def getTechInd(self, symbol, params):
+        self.curr_symbol = symbol
+        response = self.call_api('/indicator', params)
+        df = pd.DataFrame(data=response)
+        df["symbol"] = symbol
+        today = date.today()
+        df["date"] = today
+        return df
+
+    def getEarnings(self,symbol, params, earning_type):
+        self.curr_symbol = symbol
+        if earning_type == 'rev-est':
+            response = self.call_api('stock/revenue-estimate', params)
+            df = json_normalize(response["data"])
+        elif earning_type == 'eps-est':
+            response = self.call_api('stock/eps-estimate', params)
+            df = json_normalize(response["data"])
+        elif earning_type == 'earnings':
+            response = self.call_api('stock/earnings', params)
+            df = json_normalize(response)
+            df = df.sort_values('period').reset_index()
+
+        df["symbol"] = symbol
+        return df
+
+
+
 # okay decompiling finnhub_api.pyc

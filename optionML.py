@@ -18,6 +18,7 @@ from datetime import date as date
 # doing some setup
 import asyncio
 from trade_api.mongo_api import mongo_api
+from get_datetime import gettimestampForPeriod
 
 def init_ib():
     loop = asyncio.new_event_loop()
@@ -150,6 +151,55 @@ def getResultByType(request_type,code,symbol, parameters, use_td=False):
                       {'symbol': {'$in': [symbol]}}, \
                        {'symbol': 1, 'date': 1})
 
+    elif request_type == 'stock_profile':
+        if code is not None or use_td:
+            td = init_td(code)
+            result = td.getInstrument(symbol)
+
+    elif request_type == 'upgrade':
+        f = Finnapi('', 2)
+        result = f.getUpDownGrade(symbol)
+        result.gradeTime = Td.convert_timestamp_to_time(result.gradeTime, 's')
+
+
+    elif request_type == 'price-target':
+        f =  Finnapi('', 2)
+        result = f.getPriceTarget(symbol)
+
+    elif request_type == 'recommendations':
+        f = Finnapi('', 2)
+        result = f.getRecommendations(symbol)
+
+    elif request_type == 'patterns':
+        f = Finnapi('', 2)
+        if parameters == '':
+            parameters = {'resolution': 'D'}
+        result = f.getPatterns(symbol, parameters)
+
+    elif request_type == 'techind':
+        f = Finnapi('', 2)
+        if parameters == '':
+            todayTimestamp = date.today()
+            d1, d2 = gettimestampForPeriod(todayTimestamp, 'D', -10)
+            parameters = {'resolution': 'D', 'indicator': 'sma', 'timeperiod': 3, 'from': d2, 'to': d1}
+        else:
+            if parameters != '':
+                parameters = json.loads(parameters)
+                if parameters["resolution"] == 'D' or parameters["resolution"] == 'M':
+                    todayTimestamp = date.today()
+                    count = parameters["count"]
+                    d1, d2 = gettimestampForPeriod(todayTimestamp, parameters["resolution"], -count)
+                    ind_period = parameters["timeperiod"]
+                    indicator = parameters["indicator"]
+                    parameters = {'resolution': 'D', 'indicator': indicator, 'timeperiod': ind_period, 'from': d2, 'to': d1}
+
+        result = f.getTechInd(symbol, parameters)
+
+    elif request_type == 'rev-est' or request_type == 'eps-est' or request_type == 'earnings':
+        f = Finnapi('', 2)
+        result = f.getEarnings(symbol, parameters, request_type)
+
+
     return result
 
 
@@ -171,7 +221,7 @@ def getResultByWatchList(watchlist_file, outputDir, request_type, code):
             print("existing file", f)
             continue;
         try:
-            print("getting option for symbol", s)
+            print("getting " + request_type + " for symbol", s)
             result = getResultByType(request_type, code, s, '')
             if result is not None:
                 result.to_csv(f, index=False);
@@ -204,12 +254,12 @@ def main(argv):
     try:
         opts, args = getopt.getopt(argv, "hs:t:p:c:o:w:", ["help", "symbol=", "type=", "params=", "code=", "output=", "watchlist="])
     except getopt.GetoptError:
-      print('optionML.py -s symbolName -t type  <option_chain,quote,price_history,init_token> -p<options> -c<passcode> -o<output> -w<watchlistfile>')
+      print('optionML.py -s symbolName -t type  <option_chain,quote,price_history,init_token,stock_profile> -p<options> -c<passcode> -o<output> -w<watchlistfile>')
       sys.exit(2)
 
     for opt, arg in opts:
         if opt == '-h':
-            print('optionML.py -s <symbol> -t <option_chain,quote,price_history,init_token> -p<options> -c<passcode>')
+            print('optionML.py -s <symbol> -t <option_chain,quote,price_history,init_token,stock_profile,upgrade,earnings,price-targets,recommendations,patterns,techind> -p<options> -c<passcode>')
             sys.exit()
         elif opt in ("-s", "--symbol"):
             symbol = arg

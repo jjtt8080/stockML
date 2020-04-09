@@ -12,7 +12,7 @@ sys.path.append(".")
 from optionML import getResultByType
 from trade_api.tda_api import Td
 from trade_api.db_api import construct_day_filter
-from util import debug_print, append_df, update_close_for_df, load_watch_lists, drop_columns, calculate_spread,post_process_ph_df
+from util import debug_print, append_df, update_close_for_df, load_watch_lists, drop_columns, calculate_spread,post_process_ph_df, get_daily_stock_for_intraday
 import os
 import requests
 import trade_api.db_api as db_api
@@ -53,6 +53,7 @@ def persist_stock_price_history(symbols):
                 option_params = "{\"resolution\" : \"D\", \"count\": " + str(delta) + "}"
                 df = getResultByType('price_history', '2048', symbol, option_params)
                 if df is None:
+                    print("can't get result for symbol", symbol)
                     continue
                 df["datetime"] = df.t.apply(lambda x: Td.convert_timestamp_to_time(x, 's'))
                 df["symbol"] = symbol
@@ -209,7 +210,9 @@ def get_daily_stock_from_td(symbol):
             return None
 
 
-def get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range):
+
+
+def get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range, use_td=False, use_intraday=True):
     df_out = None
     symbol_count = 0
     d = Td.get_prev_trading_day(datetime.datetime.today())
@@ -222,8 +225,13 @@ def get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range)
         try:
             print("getting", symbol)
             #first we use the finn API
-            df = getResultByType('price_history', None, symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
-            if df is None:
+            if use_td:
+                df = get_daily_stock_from_td(symbol)
+            elif use_intraday:
+                df = get_daily_stock_for_intraday(symbol, datetime.datetime.today())
+            else:
+                df = getResultByType('price_history', None, symbol, "{\"resolution\": \"D\", \"count\":" + day_range + "}")
+            if df is None and use_td == False:
                 df = get_daily_stock_from_td(symbol)
             else:
                 df = post_process_ph_df(df, symbol)
@@ -244,10 +252,14 @@ def get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range)
                 time.sleep(3)
         except requests.exceptions.SSLError:
             error_symbols.add(symbol)
+            if len(error_symbols) % 15 == 0:
+                print("error symbols:", error_symbols)
             time.sleep(3)
             continue
         except json.decoder.JSONDecodeError:
             error_symbols.add(symbol)
+            if len(error_symbols) % 15 == 0:
+                print("error symbols:", error_symbols)
             time.sleep(3)
             continue
     return df_out
@@ -264,7 +276,7 @@ def compose_file_name(d):
 
 def post_processing(df_all, symbols, error_symbols):
     if df_all is not None and df_all.shape[0] > 0:
-        print("saving...")
+        print("saving...", df_all.shape)
         #today_str = datetime.datetime.today().strftime('%Y-%m-%d')
         dates = list(set(df_all["date"]))
         first_day_str = min(dates).strftime('%Y-%m-%d')
@@ -274,6 +286,7 @@ def post_processing(df_all, symbols, error_symbols):
         print("yesterday_str", yesterday_str)
         if os.path.exists( pickles_dir + os.sep + 'stock.pickle' + yesterday_str):
             yesterday_frame = pd.read_pickle( pickles_dir + os.sep + 'stock.pickle' + yesterday_str)
+            print("yesterday's frame", yesterday_frame.shape, yesterday_frame.columns)
         else:
             m = mongo_api()
             date_filter = construct_day_filter(yesterday)
@@ -292,6 +305,8 @@ def post_processing(df_all, symbols, error_symbols):
                 df_all = update_close_for_df(symbols, df_all, yesterday_frame)
         #m.write_df(df_out, collection_name)
 
+        print(df_all.shape, set(df_all.date))
+        df_all.to_pickle('stock_pickles/stock.pickle_tmp' + "_"+ datetime.datetime.today().strftime("%Y%m%d%H%M%S"))
         df_all["delete_flag"] = df_all.date.apply(lambda x: (x.hour == 16))
         df_all["keep_flag"] = df_all.date.apply(lambda x: (x.hour == 21))
 
@@ -299,7 +314,7 @@ def post_processing(df_all, symbols, error_symbols):
         print("df_keep.shape", df_keep.shape)
         df_discard = df_all[df_all["delete_flag"] == True]
         print("df_discard.shape", df_discard.shape)
-        df_keep = drop_columns(df_keep, ["delete_flag", "keep_flag"])
+        df_keep = drop_columns(df_keep, ["delete_flag", "keep_fJun19 85 C lag"])
         df_discard = drop_columns(df_discard,  ["delete_flag", "keep_flag"])
         m = mongo_api()
         if df_keep.shape[0] > 0:
@@ -316,7 +331,7 @@ def post_processing(df_all, symbols, error_symbols):
                 print("total # of rows written for timestamp 16:00:00, error symbols", df_discard.shape[0], len(error_symbols))
 
 
-def persist_daily_stock(day_range, watch_list_file, symbol = None):
+def persist_daily_stock(day_range, watch_list_file, symbol = None, useIntraDay=False):
     skipped_set = {"VIAB", "CBS", "BBT"}
     df_all = None
     if symbol is None:
@@ -341,10 +356,12 @@ def persist_daily_stock(day_range, watch_list_file, symbol = None):
     done_symbols = set()
     retry_count = 0
     while(len(done_symbols) != len(symbols)):
-        df= get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range)
+        df= get_daily_stock_for_symbols(symbols, error_symbols, done_symbols, day_range, False, useIntraDay)
         df_all = append_df(df_all, df)
-        if (len(error_symbols) == 0 or df_all.shape[0] == len(symbols) or retry_count >= 3):
+        if (len(error_symbols) == 0 or (df_all is not None and df_all.shape[0] == len(symbols)) or retry_count >= 4):
             post_processing(df_all,symbols, error_symbols)
+            if len(set(df_all.symbol)) + len(skipped_set) < len(symbols):
+                print("missing", set(symbols) - set(df_all.symbols) - set(skipped_set))
             break
         else:
             #post_processing(df_all, symbols, error_symbols)
@@ -355,4 +372,21 @@ def persist_daily_stock(day_range, watch_list_file, symbol = None):
 if sys.argv[1] is None or sys.argv[1] == '':
     print("Error argument, pass in a watch list name")
     exit(1)
-persist_daily_stock(1, sys.argv[1])
+if len(sys.argv) >= 3 and sys.argv[2] is not None:
+    day_range = sys.argv[2]
+else:
+    day_range = 1
+symbol = None
+useIntraDay = True
+optionistic = False
+if len(sys.argv) >=4 and sys.argv[3] != "":
+    symbol = sys.argv[3]
+if len(sys.argv) >= 5 and sys.argv[4] != "":
+    useIntraDay = False 
+if len(sys.argv) >= 6 and sys.argv[5] != "":
+    optionistic = True
+if optionistic is False:
+    persist_daily_stock(day_range, sys.argv[1], symbol, useIntraDay)
+#else:
+#rec = read_optionistics_stock([sys.argv[1]], "/home/jane/Downloads/20200403")
+#print("totally ", rec , "records")

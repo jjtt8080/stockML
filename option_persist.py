@@ -96,9 +96,6 @@ def find_strikes_min_max(all_strikes, strikeCount, stockPrice):
     return (all_strikes[strike_min_index], all_strikes[strike_max_index])
 
 
-
-
-
 def check_option_symbol(x, symbol):
     if not x.OptionSymbol.startswith(symbol):
         print("wrong option symbol", x)

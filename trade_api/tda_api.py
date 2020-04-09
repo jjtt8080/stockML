@@ -210,10 +210,19 @@ class Td:
             data['startDate'] = startDate,
         if endDate is not None:
             data['endDate'] = endDate
-        authReply = requests.get(('https://api.tdameritrade.com/v1/marketdata/' + symbol + '/pricehistory'), headers=headers,
-          params=data)
-        candles = authReply.json()
-        #print("price_history result json", candles)
+        result = False
+        retry = 0
+        while result is False and retry <= 3:
+            authReply = requests.get(('https://api.tdameritrade.com/v1/marketdata/' + symbol + '/pricehistory'), headers=headers,
+              params=data)
+            candles = authReply.json()
+            print("price_history result json", candles)
+            result = not candles["empty"]
+            if result is False:
+                time.sleep(10)
+                retry += 1
+        if result is False:
+            return None
         df = json_normalize(authReply.json())
         #print("df",df)
         df = pd.DataFrame(candles['candles'])
@@ -286,7 +295,7 @@ class Td:
             if df.shape[0] > 0:
                 df = df.append(df2)
             else:
-                df = df2;
+                df = df2
 
         if df is not None and df.shape[1] == len(option_params['interested_columns']):
             df.columns = option_params['interested_columns']
@@ -294,6 +303,20 @@ class Td:
             if df is not None:
                 print("option chain shape, not the same as interested_columns", df.shape)
             return None;
+        return df
+
+    def getInstrument(self, symbol):
+        today_date = datetime.datetime.today()
+        self.check_access_token_valid()
+        token = self.access_token
+        headers = {'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer {}'.format(token)}
+        data = {'symbol': symbol, 'apikey': self.apiKey, 'projection': 'fundamental'}
+        # print(data)
+        authReply = requests.get('https://api.tdameritrade.com/v1/instruments', headers=headers,
+                                 params=data)
+        foundamentalData = authReply.json()
+        Td.dump_json_file(foundamentalData, Td.get_tmp_dir() + os.sep + symbol +  '_foundamental')
+        df = json_normalize(foundamentalData)
         return df
 
     @staticmethod
@@ -339,7 +362,7 @@ class Td:
     @staticmethod
     def init(user, secrete):
         config_file = Td.get_config_dir() + 'config.json'
-        access_token_file = Td.get_tmp_dir() + 'access_token.json'
+        access_token_file = Td.get_tmp_dir() + 'access_token-python.json'
         data = []
         access_token = ''
         client_id = ''
